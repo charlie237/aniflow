@@ -8,11 +8,16 @@ import {
   Eye,
   FileVideo,
   PlayCircle,
+  Plus,
   RotateCcw,
   Rss,
   X
 } from "lucide-react";
-import { confirmJobAction, retryJobAction } from "@/app/actions";
+import {
+  confirmJobAction,
+  manualSupplementEpisodeAction,
+  retryJobAction
+} from "@/app/actions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +35,8 @@ import {
   DialogTitle,
   DialogTrigger
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -59,8 +66,10 @@ export function EpisodeTable({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const subscriptionValue = pageData.filters.subscriptionId?.toString() ?? "all";
-  const seasonValue = pageData.filters.season?.toString() ?? "all";
+  const scopeValue =
+    pageData.filters.subscriptionId == null
+      ? "all"
+      : `${pageData.filters.subscriptionId}:${pageData.filters.season ?? ""}`;
   const statusValue = pageData.filters.status;
   const hasExplicitFilters = [
     "episodeSubscriptionId",
@@ -115,6 +124,21 @@ export function EpisodeTable({
     router.push(query ? `${pathname}?${query}` : pathname);
   }
 
+  function updateEpisodeScope(value: string) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value === "all") {
+      params.delete("episodeSubscriptionId");
+      params.delete("episodeSeason");
+    } else {
+      const [subscriptionId, season] = value.split(":");
+      setOrDelete(params, "episodeSubscriptionId", subscriptionId ?? "", "all");
+      setOrDelete(params, "episodeSeason", season ?? "", "all");
+    }
+    params.delete("episodePage");
+    const query = params.toString();
+    router.push(query ? `${pathname}?${query}` : pathname);
+  }
+
   function clearEpisodeFilters() {
     const params = new URLSearchParams(searchParams.toString());
     for (const key of [
@@ -141,32 +165,20 @@ export function EpisodeTable({
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-3">
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-wrap gap-2">
           <select
-            value={subscriptionValue}
-            onChange={(event) =>
-              updateEpisodeParams({ subscriptionId: event.target.value })
-            }
-            className="h-8 min-w-[160px] rounded-[var(--radius)] border border-[var(--line)] bg-white px-2.5 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
+            value={scopeValue}
+            onChange={(event) => updateEpisodeScope(event.target.value)}
+            className="h-9 min-w-[220px] rounded-[var(--radius)] border border-[var(--line)] bg-white px-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
           >
-            <option value="all">全部订阅</option>
+            <option value="all">全部 Episode</option>
             {pageData.subscriptionOptions.map((subscription) => (
-              <option key={subscription.id} value={subscription.id}>
-                {subscription.name}
-              </option>
-            ))}
-          </select>
-          <select
-            value={seasonValue}
-            onChange={(event) =>
-              updateEpisodeParams({ season: event.target.value })
-            }
-            className="h-8 min-w-[96px] rounded-[var(--radius)] border border-[var(--line)] bg-white px-2.5 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
-          >
-            <option value="all">全部季</option>
-            {pageData.seasonOptions.map((value) => (
-              <option key={value} value={value}>
-                {seasonLabel(value)}
+              <option
+                key={`${subscription.id}:${subscription.seasonNumber}`}
+                value={`${subscription.id}:${subscription.seasonNumber}`}
+              >
+                {subscription.name} / {seasonLabel(subscription.seasonNumber)}
               </option>
             ))}
           </select>
@@ -182,6 +194,8 @@ export function EpisodeTable({
               <span className="data-digits text-xs opacity-70">{count}</span>
             </Button>
           ))}
+          </div>
+          <div className="flex flex-wrap gap-2">
           <Button
             type="button"
             size="sm"
@@ -192,6 +206,8 @@ export function EpisodeTable({
             <X className="size-4" />
             清除筛选
           </Button>
+          <ManualSupplementDialog pageData={pageData} />
+          </div>
         </div>
 
         <Table>
@@ -278,6 +294,107 @@ export function EpisodeTable({
   );
 }
 
+function ManualSupplementDialog({
+  pageData
+}: {
+  pageData: DashboardData["episodePage"];
+}) {
+  const defaultSubscriptionId =
+    pageData.filters.subscriptionId ??
+    pageData.manualSubscriptionOptions[0]?.id ??
+    "";
+
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="signal"
+          disabled={pageData.manualSubscriptionOptions.length === 0}
+        >
+          <Plus className="size-4" />
+          手动增补
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>手动增补 Episode</DialogTitle>
+          <DialogDescription>
+            用外部 magnet 或 torrent 链接补一集，提交后直接进入 OpenList 离线队列。
+          </DialogDescription>
+        </DialogHeader>
+        <form action={manualSupplementEpisodeAction} className="grid gap-4">
+          <div className="grid gap-1.5">
+            <Label htmlFor="manual-subscription">订阅</Label>
+            <select
+              id="manual-subscription"
+              name="subscriptionId"
+              defaultValue={defaultSubscriptionId}
+              required
+              className="flex h-9 w-full rounded-[var(--radius)] border border-[var(--line)] bg-white px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
+            >
+              {pageData.manualSubscriptionOptions.map((subscription) => (
+                <option key={subscription.id} value={subscription.id}>
+                  {subscription.name} / {seasonLabel(subscription.seasonNumber)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-1.5">
+              <Label htmlFor="manual-episode">集数</Label>
+              <Input
+                id="manual-episode"
+                name="episodeNumber"
+                type="number"
+                min={0}
+                max={999}
+                required
+                placeholder="2"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="manual-revision">修正版</Label>
+              <Input
+                id="manual-revision"
+                name="releaseRevision"
+                type="number"
+                min={2}
+                max={99}
+                placeholder="v2 填 2"
+              />
+            </div>
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="manual-source">下载链接</Label>
+            <Input
+              id="manual-source"
+              name="sourceUrl"
+              required
+              placeholder="magnet:?xt=urn:btih:... 或 https://...torrent"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="manual-title">发布标题</Label>
+            <Input
+              id="manual-title"
+              name="title"
+              placeholder="留空则按订阅名、集数和筛选规则生成"
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button type="submit" variant="signal">
+              <Plus className="size-4" />
+              加入队列
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function EpisodeStatus({ row }: { row: DashboardEpisodeRow }) {
   const failedFile = row.files.find((file) => file.status === "failed");
   const renamedFile = row.files.find((file) => file.status === "renamed");
@@ -328,12 +445,14 @@ function EpisodeDetails({ row }: { row: DashboardEpisodeRow }) {
             <DetailItem label="GUID" value={row.item?.rssGuid} mono />
             <DetailItem label="发布页" value={row.item?.link} mono />
             <DetailItem label="下载链接" value={row.item?.downloadUrl} mono />
-            <DetailItem label="发布日期" value={formatDateTime(row.item?.publishedAt)} />
+            <DetailItem
+              label="发布日期"
+              value={formatOptionalDateTime(row.item?.publishedAt)}
+            />
             <DetailItem label="首次发现" value={formatDateTime(row.item?.firstSeenAt)} />
           </DetailSection>
 
-          <DetailSection icon={<AlertTriangle className="size-4" />} title="解析">
-            <DetailItem label="名称" value={row.metadata?.parsedTitle} />
+          <DetailSection icon={<AlertTriangle className="size-4" />} title="识别结果">
             <DetailItem label="集数" value={episodeLabel(row, row.metadata)} mono />
             <DetailItem label="字幕组" value={row.metadata?.releaseGroup} />
             <DetailItem label="分辨率" value={row.metadata?.resolution} />
@@ -428,8 +547,14 @@ function episodeLabel(
     metadata?.releaseRevision && metadata.releaseRevision > 1
       ? ` v${metadata.releaseRevision}`
       : "";
+  return `${episodeNumberLabel(row)}${revision}`;
+}
+
+function episodeNumberLabel(
+  row: Pick<DashboardEpisodeRow, "episodeNumber" | "episodeText">
+) {
   if (row.episodeNumber != null) {
-    return `EP${String(row.episodeNumber).padStart(2, "0")}${revision}`;
+    return `EP${String(row.episodeNumber).padStart(2, "0")}`;
   }
   return row.episodeText || "未解析";
 }
@@ -441,6 +566,10 @@ function displayTitle(row: DashboardEpisodeRow) {
 function seasonLabel(seasonNumber: number | null) {
   if (seasonNumber == null) return "S--";
   return `S${String(seasonNumber).padStart(2, "0")}`;
+}
+
+function formatOptionalDateTime(value?: string | null) {
+  return value ? formatDateTime(value) : null;
 }
 
 function filterSummary(metadata: ReleaseMetadata | null) {

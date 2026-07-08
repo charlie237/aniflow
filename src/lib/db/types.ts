@@ -164,6 +164,12 @@ export interface DashboardEpisodePage {
   subscriptionOptions: Array<{
     id: number;
     name: string;
+    seasonNumber: number;
+  }>;
+  manualSubscriptionOptions: Array<{
+    id: number;
+    name: string;
+    seasonNumber: number;
   }>;
   seasonOptions: number[];
 }

@@ -827,15 +827,7 @@ export function getDashboardEpisodePage(
 ): DashboardEpisodePage {
   const query = normalizeEpisodeQuery(input);
   const rows = listDashboardEpisodeRows(subscriptions, rules);
-  const requestedSeason = subscriptions.some(
-    (subscription) => subscription.seasonNumber === query.season
-  )
-    ? query.season
-    : null;
-  const subscriptionOptions = subscriptionOptionsForSubscriptions(
-    subscriptions,
-    requestedSeason
-  );
+  const subscriptionOptions = subscriptionOptionsForSubscriptions(subscriptions);
   const validSubscriptionId = subscriptionOptions.some(
     (option) => option.id === query.subscriptionId
   )
@@ -886,22 +878,20 @@ export function getDashboardEpisodePage(
     },
     counts,
     subscriptionOptions,
+    manualSubscriptionOptions: subscriptions.map((subscription) => ({
+      id: subscription.id,
+      name: subscription.name,
+      seasonNumber: subscription.seasonNumber
+    })),
     seasonOptions
   };
 }
 
-function subscriptionOptionsForSubscriptions(
-  subscriptions: Subscription[],
-  season: number | null
-) {
-  return subscriptions
-    .filter(
-      (subscription) =>
-        season == null || subscription.seasonNumber === season
-    )
-    .map((subscription) => ({
+function subscriptionOptionsForSubscriptions(subscriptions: Subscription[]) {
+  return subscriptions.map((subscription) => ({
       id: subscription.id,
-      name: subscription.name
+      name: subscription.name,
+      seasonNumber: subscription.seasonNumber
     }));
 }
 

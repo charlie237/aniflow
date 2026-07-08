@@ -1,10 +1,12 @@
 "use server";
 
+import { createHash } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { redirect } from "next/navigation";
 import {
   addRule,
+  createOrUpdateJob,
   createSubscription,
   deleteRule,
   deleteSubscription,
@@ -15,7 +17,8 @@ import {
   replaceSubscriptionAllowRules,
   resetRuntimeData,
   saveSystemSettings,
-  updateSubscription
+  updateSubscription,
+  upsertFeedItem
 } from "@/lib/db/repositories";
 import type { RuleType, SystemSettings, WorkerTaskType } from "@/lib/db/types";
 import {
@@ -91,6 +94,16 @@ const settingsSchema = z.object({
   proxyUrl: z.string().optional().default("http://127.0.0.1:7890"),
   tmdbBearerToken: z.string().optional().default(""),
   workerIntervalSeconds: z.coerce.number().int().min(30).max(86400)
+});
+
+const manualEpisodeSchema = z.object({
+  subscriptionId: z.coerce.number().int().positive(),
+  episodeNumber: z.coerce.number().int().min(0).max(999),
+  releaseRevision: z.coerce.number().int().min(1).max(99).default(1),
+  sourceUrl: z.string().trim().min(1).refine(isDownloadUrl, {
+    message: "请输入 magnet 或 http(s) 下载链接"
+  }),
+  title: z.string().trim().optional().default("")
 });
 
 export async function saveSubscriptionAction(formData: FormData) {
@@ -297,6 +310,83 @@ export async function confirmJobAction(formData: FormData) {
   revalidatePath("/");
 }
 
+export async function manualSupplementEpisodeAction(formData: FormData) {
+  const parsed = manualEpisodeSchema.parse({
+    subscriptionId: formData.get("subscriptionId"),
+    episodeNumber: formData.get("episodeNumber"),
+    releaseRevision: formData.get("releaseRevision") || 1,
+    sourceUrl: formData.get("sourceUrl"),
+    title: formData.get("title")?.toString() ?? ""
+  });
+  const subscription = getSubscription(parsed.subscriptionId);
+  if (!subscription) return;
+
+  const settings = getSystemSettings();
+  const rules = listRules(subscription.id).filter((rule) => rule.enabled);
+  const releaseGroup = coreRuleValue(rules, "group_allow");
+  const resolution = coreRuleValue(rules, "resolution_allow");
+  const subtitleLanguage = coreRuleValue(rules, "language_allow");
+  const episodeText = String(parsed.episodeNumber).padStart(2, "0");
+  const revisionSuffix =
+    parsed.releaseRevision > 1 ? `v${parsed.releaseRevision}` : "";
+  const title =
+    parsed.title ||
+    manualEpisodeTitle({
+      subscriptionName: subscription.name,
+      episodeText,
+      revisionSuffix,
+      releaseGroup,
+      resolution,
+      subtitleLanguage
+    });
+  const guid = [
+    "manual",
+    subscription.id,
+    parsed.episodeNumber,
+    parsed.releaseRevision,
+    shortHash(parsed.sourceUrl)
+  ].join(":");
+
+  const feedItem = upsertFeedItem(subscription, {
+    guid,
+    rssGuid: guid,
+    title,
+    link: parsed.sourceUrl.startsWith("magnet:") ? null : parsed.sourceUrl,
+    downloadUrl: parsed.sourceUrl,
+    publishedAt: new Date().toISOString(),
+    rawXmlJson: JSON.stringify({
+      manual: true,
+      sourceUrl: parsed.sourceUrl
+    }),
+    metadata: {
+      releaseGroup,
+      parsedTitle: subscription.name,
+      episodeNumber: parsed.episodeNumber,
+      episodeText,
+      releaseRevision: parsed.releaseRevision,
+      resolution,
+      subtitleLanguage,
+      container: null,
+      tags: [releaseGroup, resolution, subtitleLanguage].filter(
+        (value): value is string => Boolean(value)
+      ),
+      parseConfidence: 100,
+      needsReview: false
+    }
+  });
+
+  createOrUpdateJob({
+    subscriptionId: subscription.id,
+    feedItemId: feedItem.id,
+    status: "queued",
+    sourceUrl: parsed.sourceUrl,
+    targetPath: subscription.incomingPath ?? settings.openlistIncomingPath,
+    errorMessage: null
+  });
+  enqueueAndKickWorkerTask("submit_queued");
+  revalidatePath("/");
+}
+
 export async function saveSettingsAction(formData: FormData) {
   const parsed = parseSettingsForm(formData);
   const settings = saveSystemSettings(parsed);
@@ -415,6 +505,44 @@ async function ensureConfiguredOpenListDirectoriesCheck(
       message: error instanceof Error ? error.message : String(error)
     };
   }
+}
+
+function coreRuleValue(
+  rules: Array<{ type: RuleType; value: string }>,
+  type: RuleType
+) {
+  return rules.find((rule) => rule.type === type)?.value ?? null;
+}
+
+function isDownloadUrl(value: string) {
+  return value.startsWith("magnet:?") || /^https?:\/\/\S+$/i.test(value);
+}
+
+function shortHash(value: string) {
+  return createHash("sha1").update(value).digest("hex").slice(0, 12);
+}
+
+function manualEpisodeTitle({
+  subscriptionName,
+  episodeText,
+  revisionSuffix,
+  releaseGroup,
+  resolution,
+  subtitleLanguage
+}: {
+  subscriptionName: string;
+  episodeText: string;
+  revisionSuffix: string;
+  releaseGroup: string | null;
+  resolution: string | null;
+  subtitleLanguage: string | null;
+}) {
+  const prefix = releaseGroup ? `[${releaseGroup}] ` : "";
+  const tags = [resolution, subtitleLanguage]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => `[${value}]`)
+    .join("");
+  return `${prefix}${subscriptionName} - ${episodeText}${revisionSuffix}${tags}`;
 }
 
 function optionalFormString(value: FormDataEntryValue | null) {

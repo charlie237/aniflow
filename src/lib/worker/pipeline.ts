@@ -243,6 +243,17 @@ export async function submitJob(job: DownloadJob) {
   const feedItem = getFeedItem(job.feedItemId);
   const metadata = getMetadataForFeedItem(job.feedItemId);
   if (feedItem && metadata) {
+    const preferredFeedItemId = getPreferredFeedItemIdForRelease(
+      subscription.id,
+      metadata
+    );
+    if (preferredFeedItemId != null && preferredFeedItemId !== feedItem.id) {
+      updateJobStatus(job.id, "skipped", {
+        errorMessage: "Superseded by a newer release revision"
+      });
+      return;
+    }
+
     const decision = evaluateRules(feedItem.title, metadata, listRules(subscription.id));
     if (!decision.allowed) {
       updateJobStatus(job.id, "skipped", {
