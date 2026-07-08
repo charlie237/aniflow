@@ -1,0 +1,84 @@
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle
+} from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
+} from "@/components/ui/table";
+import { StatusBadge } from "@/components/status-badge";
+import { TagRow } from "@/components/tag-row";
+import { Badge } from "@/components/ui/badge";
+import { formatDateTime } from "@/lib/utils";
+import type { DashboardData } from "@/lib/db/types";
+
+export function ReleaseTable({ items }: { items: DashboardData["feedItems"] }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>剧集发布</CardTitle>
+        <CardDescription>字幕组、分辨率、字幕语言等只作为 TAG 和筛选条件。</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>剧集</TableHead>
+              <TableHead>TAG</TableHead>
+              <TableHead>下载源</TableHead>
+              <TableHead className="w-28">状态</TableHead>
+              <TableHead className="w-28">发现</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="h-24 text-center text-[var(--muted)]">
+                  还没有 RSS 条目。
+                </TableCell>
+              </TableRow>
+            ) : (
+              items.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell className="max-w-[420px]">
+                    <div className="truncate font-medium">{item.title}</div>
+                    <div className="mt-1 flex flex-wrap gap-1.5 text-xs text-[var(--muted)]">
+                      <span>{item.subscriptionName}</span>
+                      {item.metadata?.episodeNumber != null ? (
+                        <Badge variant="violet">
+                          EP {String(item.metadata.episodeNumber).padStart(2, "0")}
+                        </Badge>
+                      ) : null}
+                      {item.metadata?.parseConfidence != null ? (
+                        <Badge variant="muted">{item.metadata.parseConfidence}%</Badge>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <TagRow metadata={item.metadata} />
+                  </TableCell>
+                  <TableCell className="max-w-[260px] truncate data-digits text-xs">
+                    {item.downloadUrl ?? item.link ?? "-"}
+                  </TableCell>
+                  <TableCell>
+                    {item.job ? <StatusBadge status={item.job.status} /> : <Badge variant="muted">未入队</Badge>}
+                  </TableCell>
+                  <TableCell className="data-digits text-xs">
+                    {formatDateTime(item.firstSeenAt)}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}

@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+:root {
+  --background: #f6f7f3;
+  --foreground: #181c1f;
+  --panel: #ffffff;
+  --panel-strong: #eff3ed;
+  --muted: #687076;
+  --line: #d9ded8;
+  --signal: #008f68;
+  --signal-foreground: #f7fffb;
+  --accent: #d97706;
+  --accent-foreground: #fffaf0;
+  --violet: #6d5bd0;
+  --danger: #d92d20;
+  --radius: 8px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background:
+    linear-gradient(90deg, rgba(24, 28, 31, 0.035) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(24, 28, 31, 0.035) 1px, transparent 1px),
+    var(--background);
+  background-size: 28px 28px;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+::selection {
+  background: rgba(0, 143, 104, 0.18);
+}
+
+.data-digits {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+    Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.scanline {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(24, 28, 31, 0.045),
+    rgba(24, 28, 31, 0.045) 1px,
+    transparent 1px,
+    transparent 7px
+  );
+}
