@@ -4,7 +4,8 @@ import type {
   FeedItem,
   FilterRule,
   ReleaseMetadata,
-  Subscription
+  Subscription,
+  WorkerTask
 } from "@/lib/db/types";
 
 export function mapSubscription(row: Record<string, unknown>): Subscription {
@@ -40,6 +41,7 @@ export function mapFeedItem(row: Record<string, unknown>): FeedItem {
     id: Number(row.id),
     subscriptionId: Number(row.subscription_id),
     guid: String(row.guid),
+    rssGuid: nullableString(row.rss_guid),
     title: String(row.title),
     link: nullableString(row.link),
     downloadUrl: nullableString(row.download_url),
@@ -58,11 +60,9 @@ export function mapMetadata(row: Record<string, unknown> | undefined | null): Re
     parsedTitle: nullableString(row.parsed_title),
     episodeNumber: nullableNumber(row.episode_number),
     episodeText: nullableString(row.episode_text),
+    releaseRevision: nullableNumber(row.release_revision) ?? 1,
     resolution: nullableString(row.resolution),
     subtitleLanguage: nullableString(row.subtitle_language),
-    source: nullableString(row.source),
-    codec: nullableString(row.codec),
-    audio: nullableString(row.audio),
     container: nullableString(row.container),
     tags: parseJsonArray(row.tags_json),
     parseConfidence: Number(row.parse_confidence ?? 0),
@@ -98,6 +98,22 @@ export function mapEpisodeFile(row: Record<string, unknown>): EpisodeFile {
     status: row.status as EpisodeFile["status"],
     errorMessage: nullableString(row.error_message),
     createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at)
+  };
+}
+
+export function mapWorkerTask(row: Record<string, unknown>): WorkerTask {
+  return {
+    id: Number(row.id),
+    type: row.type as WorkerTask["type"],
+    subscriptionId: nullableNumber(row.subscription_id),
+    status: row.status as WorkerTask["status"],
+    payloadJson: String(row.payload_json ?? "{}"),
+    errorMessage: nullableString(row.error_message),
+    attempts: Number(row.attempts ?? 0),
+    createdAt: String(row.created_at),
+    startedAt: nullableString(row.started_at),
+    finishedAt: nullableString(row.finished_at),
     updatedAt: String(row.updated_at)
   };
 }

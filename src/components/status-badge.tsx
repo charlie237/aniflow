@@ -6,7 +6,7 @@ const statusLabels: Record<JobStatus, string> = {
   skipped: "已跳过",
   queued: "队列中",
   downloading: "下载中",
-  needs_review: "待确认",
+  needs_review: "待处理",
   ready_to_rename: "待整理",
   completed: "已完成",
   failed: "失败"

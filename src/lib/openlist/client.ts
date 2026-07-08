@@ -136,7 +136,7 @@ export async function check115Connectivity(): Promise<OpenList115CheckResult> {
     }
 
     checks.push({
-      label: "OpenList 115 保存路径",
+      label: "下载目录",
       ok: pathCheck.ok,
       message: pathCheck.message
     });
@@ -154,7 +154,7 @@ export async function check115Connectivity(): Promise<OpenList115CheckResult> {
       });
     }
     checks.push({
-      label: "OpenList 115 保存路径",
+      label: "下载目录",
       ok: false,
       message: savePathErrorMessage(settings.openlistIncomingPath, error)
     });
@@ -168,8 +168,10 @@ export async function check115Connectivity(): Promise<OpenList115CheckResult> {
 
 export async function ensureOpenListDirectory(path: string) {
   const parts = path.split("/").filter(Boolean);
-  let current = "";
-  for (const part of parts) {
+  if (parts.length <= 1) return;
+
+  let current = joinRemotePath(parts[0]);
+  for (const part of parts.slice(1)) {
     current = joinRemotePath(current, part);
     try {
       await openListRequest("/api/fs/mkdir", { path: current });
@@ -193,6 +195,17 @@ export async function moveOpenListFiles(params: {
     dst_dir: params.dstDir,
     names: params.names,
     overwrite: params.overwrite ?? false
+  });
+}
+
+export async function removeOpenListFiles(params: {
+  dir: string;
+  names: string[];
+}) {
+  if (params.names.length === 0) return;
+  await openListRequest("/api/fs/remove", {
+    dir: params.dir,
+    names: params.names
   });
 }
 
@@ -327,9 +340,9 @@ function accessModeCheckMessage(params: {
     const readyText = params.tools.includes(params.mode)
       ? "OpenList ready 工具列表也包含该接入方式"
       : `ready 工具列表只返回：${params.tools.join(", ") || "无"}`;
-    return `保存路径属于 ${params.provider} 挂载，可按 ${params.mode} 直接提交；${readyText}`;
+    return `下载目录属于 ${params.provider} 挂载，可按 ${params.mode} 直接提交；${readyText}`;
   }
-  return `OpenList ready 工具未包含 ${params.mode}，当前 ready 工具：${params.tools.join(", ") || "无"}；请确认保存路径属于对应 115 挂载，或在 OpenList 后台配置对应 115 离线临时目录`;
+  return `OpenList ready 工具未包含 ${params.mode}，当前 ready 工具：${params.tools.join(", ") || "无"}；请确认下载目录属于对应 115 挂载，或点击检测同步 OpenList 后台配置`;
 }
 
 function openListPathCheckMessage(params: {
@@ -345,10 +358,10 @@ function openListPathCheckMessage(params: {
     return `${params.checkedPath} 可访问，但当前用户没有写权限${providerText}`;
   }
   if (!params.providerMatchesMode) {
-    return `${params.checkedPath} 可访问且可写${providerText}，但当前选择的是 ${params.mode}；保存路径必须位于对应的 115 挂载下`;
+    return `${params.checkedPath} 可访问且可写${providerText}，但当前选择的是 ${params.mode}；下载目录必须位于对应的 115 挂载下`;
   }
   if (params.checkedPath !== params.path) {
-    return `${params.path} 还不存在；父目录 ${params.checkedPath} 可访问且可写${providerText}，离线任务会尝试创建目标目录`;
+    return `${params.path} 还不存在；父目录 ${params.checkedPath} 可访问且可写${providerText}，离线任务会尝试创建下载目录`;
   }
   return `${params.path} 可访问且可写${providerText}`;
 }
@@ -356,9 +369,13 @@ function openListPathCheckMessage(params: {
 function savePathErrorMessage(path: string, error: unknown) {
   const message = errorMessage(error);
   if (isNotFoundError(error)) {
-    return `${path} 及其父目录在 OpenList 中不可访问：${message}。请确认第一段挂载名存在，例如 /115/anime/_incoming 里的 /115 必须是 OpenList 里的 115 挂载`;
+    return `${path} 及其父目录在 OpenList 中不可访问：${message}。请确认第一段挂载名存在，例如 /115/Anime/_incoming 里的 /115 必须是 OpenList 里的 115 挂载`;
   }
   return message;
+}
+
+export function isOpenListNotFoundError(error: unknown) {
+  return isNotFoundError(error);
 }
 
 function ancestorPaths(path: string) {

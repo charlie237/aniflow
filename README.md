@@ -39,19 +39,17 @@ Open the **后台设置** page in the app and fill in OpenList API, 115 access
 method, proxy settings, naming templates, TMDB, and worker interval settings
 there. Runtime integration settings are stored in SQLite, not in `.env`.
 
-The OpenList 115 save path is the incoming/staging path for offline downloads,
-for example `/115/anime/_incoming`. It is an OpenList remote path under a
-mounted 115 storage, not a local filesystem path and not WebDAV. The app
-submits RSS torrent or magnet URLs to `/api/fs/add_offline_download` with that
-mounted path as `path`, then uses OpenList fs APIs to scan, rename, create
-target directories, and move completed files.
+The download directory is the single incoming directory for this app, for
+example `/115/Anime/_incoming`. It is an OpenList remote path under a mounted
+115 storage, not a local filesystem path and not WebDAV. The app submits RSS
+torrent or magnet URLs to `/api/fs/add_offline_download` with that path, then
+uses OpenList fs APIs to scan, rename, create target directories, and move
+completed files.
 
-`115 Cloud` and `115 Open` select the OpenList offline backend sent as `tool`.
-Choose the access method that matches the 115 storage mounted at the save path.
-The OpenList 115 temp dir writes to OpenList's own `115 Cloud` or `115 Open`
-offline temp directory setting. It is what makes that backend appear in the
-ready tool list, and it must also be under the same type of 115 mount, for
-example `/115/anime/_incoming`.
+`115 Cloud` and `115 Open` are different OpenList offline backends. Choose the
+one that matches the driver mounted at `/115`. Clicking the 115 check button
+syncs the download directory to OpenList's matching backend configuration
+before reading the ready tool list.
 
 RSS fetching only uses the proxy configured in **后台设置** when the proxy switch
 is enabled. The proxy field defaults to `http://127.0.0.1:7890`, but it is not
@@ -82,9 +80,8 @@ and displayed in the episode management UI.
 Recommended path shape:
 
 ```text
-OpenList 115 temp dir:  /115/anime/_incoming
-OpenList 115 save path: /115/anime/_incoming
-Media library root:     /115/anime
+Download directory: /115/Anime/_incoming
+Media library root: /115/Anime
 Season path template:   {title}/Season {season_pad}
 File name template:     {title} - S{season_pad}E{episode_pad}.{ext}
 ```
@@ -92,7 +89,7 @@ File name template:     {title} - S{season_pad}E{episode_pad}.{ext}
 Default final path:
 
 ```text
-/115/anime/Show Name/Season 01/Show Name - S01E01.mkv
+/115/Anime/Show Name/Season 01/Show Name - S01E01.mkv
 ```
 
 The default templates are:
@@ -108,6 +105,6 @@ Available variables are `{title}`, `{season}`, `{season_pad}`, `{episode}`,
 ## Notes
 
 - TMDB is optional and only intended for display enrichment.
-- Items without a confidently parsed episode number are marked for review.
+- Items without a parsed episode number are held for manual handling.
 - Rules can allow/block subtitle groups, resolutions, subtitle languages, and
   include/exclude keywords.

@@ -1,22 +1,22 @@
-import { getSystemSettings } from "../src/lib/db/repositories";
 import {
-  pollAllSubscriptions,
-  scanAndRenameIncoming,
-  submitQueuedJobs
-} from "../src/lib/worker/pipeline";
+  enqueueWorkerTask,
+  getSystemSettings,
+  touchWorkerHeartbeat
+} from "../src/lib/db/repositories";
+import { processWorkerTaskQueue } from "../src/lib/worker/tasks";
 
 async function tick() {
+  touchWorkerHeartbeat();
   const startedAt = new Date();
   console.log(`[worker] tick ${startedAt.toISOString()}`);
   try {
-    const result = await pollAllSubscriptions();
-    await submitQueuedJobs();
-    await scanAndRenameIncoming();
-    console.log(
-      `[worker] done discovered=${result.discovered} queued=${result.queued} skipped=${result.skipped} failed=${result.failed}`
-    );
+    enqueueWorkerTask({ type: "poll_all" });
+    const result = await processWorkerTaskQueue();
+    console.log(`[worker] processed=${result.processed}`);
   } catch (error) {
     console.error("[worker] tick failed", error);
+  } finally {
+    touchWorkerHeartbeat();
   }
 }
 

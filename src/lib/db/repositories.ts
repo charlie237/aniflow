@@ -5,11 +5,15 @@ import {
   mapJob,
   mapMetadata,
   mapRule,
-  mapSubscription
+  mapSubscription,
+  mapWorkerTask
 } from "@/lib/db/mappers";
 import type {
   DashboardData,
+  DashboardEpisodePage,
+  DashboardEpisodeRow,
   DownloadJob,
+  EpisodeStatusFilter,
   EpisodeFile,
   FeedItem,
   FilterRule,
@@ -17,18 +21,23 @@ import type {
   ReleaseMetadata,
   RuleType,
   SystemSettings,
-  Subscription
+  Subscription,
+  WorkerHealth,
+  WorkerTask,
+  WorkerTaskStatus,
+  WorkerTaskType
 } from "@/lib/db/types";
+import { evaluateRules } from "@/lib/rules/engine";
 
 const defaultSystemSettings: SystemSettings = {
   openlistBaseUrl: "",
   openlistToken: "",
   openlist115Mode: "115 Cloud",
-  openlist115TempDir: "/115/anime/_incoming",
-  openlistIncomingPath: "/115/anime/_incoming",
-  mediaLibraryRoot: "/115/anime",
+  openlistIncomingPath: "/115/Anime/_incoming",
+  mediaLibraryRoot: "/115/Anime",
   seasonPathTemplate: "{title}/Season {season_pad}",
   episodeFileTemplate: "{title} - S{season_pad}E{episode_pad}.{ext}",
+  replaceExistingOnRevision: true,
   proxyEnabled: false,
   proxyUrl: "http://127.0.0.1:7890",
   tmdbBearerToken: "",
@@ -48,6 +57,7 @@ export interface SubscriptionInput {
 
 export interface ParsedFeedInput {
   guid: string;
+  rssGuid?: string | null;
   title: string;
   link?: string | null;
   downloadUrl?: string | null;
@@ -121,7 +131,22 @@ export function touchSubscriptionPolled(id: number) {
 }
 
 export function deleteSubscription(id: number) {
-  getDb().prepare("DELETE FROM subscriptions WHERE id = ?").run(id);
+  const db = getDb();
+  const tx = db.transaction(() => {
+    db.prepare("DELETE FROM episode_files WHERE subscription_id = ?").run(id);
+    db.prepare("DELETE FROM download_jobs WHERE subscription_id = ?").run(id);
+    db.prepare(
+      `DELETE FROM release_metadata
+       WHERE feed_item_id IN (
+         SELECT id FROM feed_items WHERE subscription_id = ?
+       )`
+    ).run(id);
+    db.prepare("DELETE FROM feed_items WHERE subscription_id = ?").run(id);
+    db.prepare("DELETE FROM filter_rules WHERE subscription_id = ?").run(id);
+    db.prepare("DELETE FROM worker_tasks WHERE subscription_id = ?").run(id);
+    db.prepare("DELETE FROM subscriptions WHERE id = ?").run(id);
+  });
+  tx();
 }
 
 export function listRules(subscriptionId?: number) {
@@ -145,6 +170,28 @@ export function addRule(subscriptionId: number, type: RuleType, value: string) {
     .run(subscriptionId, type, value.trim());
 }
 
+export function replaceSubscriptionAllowRules(
+  subscriptionId: number,
+  rules: Array<{ type: Extract<RuleType, "group_allow" | "resolution_allow" | "language_allow">; value: string }>
+) {
+  const db = getDb();
+  const transaction = db.transaction(() => {
+    db.prepare(
+      `DELETE FROM filter_rules
+       WHERE subscription_id = ?
+         AND type IN ('group_allow', 'resolution_allow', 'language_allow')`
+    ).run(subscriptionId);
+
+    const insert = db.prepare(
+      "INSERT INTO filter_rules (subscription_id, type, value) VALUES (?, ?, ?)"
+    );
+    for (const rule of rules) {
+      insert.run(subscriptionId, rule.type, rule.value.trim());
+    }
+  });
+  transaction();
+}
+
 export function deleteRule(id: number) {
   getDb().prepare("DELETE FROM filter_rules WHERE id = ?").run(id);
 }
@@ -160,19 +207,12 @@ export function getSystemSettings(): SystemSettings {
       values.get("openlistBaseUrl") ?? defaultSystemSettings.openlistBaseUrl,
     openlistToken:
       values.get("openlistToken") ?? defaultSystemSettings.openlistToken,
-    openlist115Mode: normalize115Mode(
-      values.get("openlist115Mode") ?? values.get("openlistDownloadTool")
-    ),
-    openlist115TempDir:
-      values.get("openlist115TempDir") ??
-      values.get("openlistIncomingPath") ??
-      defaultSystemSettings.openlist115TempDir,
+    openlist115Mode: normalize115Mode(values.get("openlist115Mode")),
     openlistIncomingPath:
       values.get("openlistIncomingPath") ??
       defaultSystemSettings.openlistIncomingPath,
     mediaLibraryRoot:
       values.get("mediaLibraryRoot") ??
-      values.get("defaultDestinationRoot") ??
       defaultSystemSettings.mediaLibraryRoot,
     seasonPathTemplate:
       values.get("seasonPathTemplate") ??
@@ -180,10 +220,13 @@ export function getSystemSettings(): SystemSettings {
     episodeFileTemplate:
       values.get("episodeFileTemplate") ??
       defaultSystemSettings.episodeFileTemplate,
+    replaceExistingOnRevision: boolSetting(
+      values.get("replaceExistingOnRevision"),
+      defaultSystemSettings.replaceExistingOnRevision
+    ),
     proxyEnabled: boolSetting(values.get("proxyEnabled"), false),
     proxyUrl:
       values.get("proxyUrl") ??
-      legacyProxyUrl(values) ??
       defaultSystemSettings.proxyUrl,
     tmdbBearerToken:
       values.get("tmdbBearerToken") ?? defaultSystemSettings.tmdbBearerToken,
@@ -213,16 +256,54 @@ export function saveSystemSettings(input: SystemSettings) {
   return normalized;
 }
 
+export function touchWorkerHeartbeat() {
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key, value, updated_at)
+       VALUES ('workerLastSeenAt', ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = CURRENT_TIMESTAMP`
+    )
+    .run(new Date().toISOString());
+}
+
+export function getWorkerHealth(): WorkerHealth {
+  const settings = getSystemSettings();
+  const row = getDb()
+    .prepare("SELECT value FROM settings WHERE key = 'workerLastSeenAt'")
+    .get() as { value: string } | undefined;
+  const lastSeenAt = row?.value ?? null;
+  const staleAfterSeconds = Math.max(settings.workerIntervalSeconds * 2 + 60, 180);
+  const secondsSinceLastSeen = lastSeenAt
+    ? Math.floor((Date.now() - new Date(lastSeenAt).getTime()) / 1000)
+    : null;
+
+  return {
+    lastSeenAt,
+    secondsSinceLastSeen:
+      secondsSinceLastSeen == null || Number.isNaN(secondsSinceLastSeen)
+        ? null
+        : secondsSinceLastSeen,
+    staleAfterSeconds,
+    ok:
+      secondsSinceLastSeen != null &&
+      Number.isFinite(secondsSinceLastSeen) &&
+      secondsSinceLastSeen <= staleAfterSeconds
+  };
+}
+
 export function upsertFeedItem(subscription: Subscription, item: ParsedFeedInput) {
   const db = getDb();
   const tx = db.transaction(() => {
     db.prepare(
       `INSERT OR IGNORE INTO feed_items (
-        subscription_id, guid, title, link, download_url, published_at, raw_xml_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        subscription_id, guid, rss_guid, title, link, download_url, published_at, raw_xml_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       subscription.id,
       item.guid,
+      item.rssGuid ?? null,
       item.title,
       item.link ?? null,
       item.downloadUrl ?? null,
@@ -241,16 +322,39 @@ export function upsertFeedItem(subscription: Subscription, item: ParsedFeedInput
       | undefined;
 
     if (!feedRow) throw new Error("Failed to read feed item after insert");
-    const feedItem = mapFeedItem(feedRow);
+    db.prepare(
+      `UPDATE feed_items SET
+        rss_guid = ?,
+        title = ?,
+        link = ?,
+        download_url = COALESCE(?, download_url),
+        published_at = COALESCE(?, published_at),
+        raw_xml_json = ?
+       WHERE id = ?`
+    ).run(
+      item.rssGuid ?? null,
+      item.title,
+      item.link ?? null,
+      item.downloadUrl ?? null,
+      item.publishedAt ?? null,
+      item.rawXmlJson ?? null,
+      Number(feedRow.id)
+    );
+
+    const updatedFeedRow = db
+      .prepare("SELECT * FROM feed_items WHERE id = ?")
+      .get(feedRow.id) as Record<string, unknown> | undefined;
+    if (!updatedFeedRow) throw new Error("Failed to read feed item after update");
+    const feedItem = mapFeedItem(updatedFeedRow);
 
     db.prepare(
       `INSERT INTO release_metadata (
         feed_item_id, release_group, parsed_title, episode_number, episode_text,
-        resolution, subtitle_language, source, codec, audio, container,
+        release_revision, resolution, subtitle_language, container,
         tags_json, parse_confidence, needs_review
       ) VALUES (
         @feedItemId, @releaseGroup, @parsedTitle, @episodeNumber, @episodeText,
-        @resolution, @subtitleLanguage, @source, @codec, @audio, @container,
+        @releaseRevision, @resolution, @subtitleLanguage, @container,
         @tagsJson, @parseConfidence, @needsReview
       )
       ON CONFLICT(feed_item_id) DO UPDATE SET
@@ -258,11 +362,9 @@ export function upsertFeedItem(subscription: Subscription, item: ParsedFeedInput
         parsed_title = excluded.parsed_title,
         episode_number = excluded.episode_number,
         episode_text = excluded.episode_text,
+        release_revision = excluded.release_revision,
         resolution = excluded.resolution,
         subtitle_language = excluded.subtitle_language,
-        source = excluded.source,
-        codec = excluded.codec,
-        audio = excluded.audio,
         container = excluded.container,
         tags_json = excluded.tags_json,
         parse_confidence = excluded.parse_confidence,
@@ -273,11 +375,9 @@ export function upsertFeedItem(subscription: Subscription, item: ParsedFeedInput
       parsedTitle: item.metadata.parsedTitle,
       episodeNumber: item.metadata.episodeNumber,
       episodeText: item.metadata.episodeText,
+      releaseRevision: item.metadata.releaseRevision,
       resolution: item.metadata.resolution,
       subtitleLanguage: item.metadata.subtitleLanguage,
-      source: item.metadata.source,
-      codec: item.metadata.codec,
-      audio: item.metadata.audio,
       container: item.metadata.container,
       tagsJson: JSON.stringify(item.metadata.tags),
       parseConfidence: item.metadata.parseConfidence,
@@ -301,6 +401,37 @@ export function getMetadataForFeedItem(feedItemId: number) {
     .prepare("SELECT * FROM release_metadata WHERE feed_item_id = ?")
     .get(feedItemId) as Record<string, unknown> | undefined;
   return mapMetadata(row);
+}
+
+export function getPreferredFeedItemIdForRelease(
+  subscriptionId: number,
+  metadata: ReleaseMetadata
+) {
+  if (metadata.episodeNumber == null) return null;
+  const row = getDb()
+    .prepare(
+      `SELECT f.id
+       FROM feed_items f
+       JOIN release_metadata m ON m.feed_item_id = f.id
+       WHERE f.subscription_id = @subscriptionId
+         AND m.episode_number = @episodeNumber
+         AND COALESCE(m.release_group, '') = COALESCE(@releaseGroup, '')
+         AND COALESCE(m.resolution, '') = COALESCE(@resolution, '')
+         AND COALESCE(m.subtitle_language, '') = COALESCE(@subtitleLanguage, '')
+       ORDER BY m.release_revision DESC,
+         datetime(COALESCE(f.published_at, f.first_seen_at)) DESC,
+         f.id DESC
+       LIMIT 1`
+    )
+    .get({
+      subscriptionId,
+      episodeNumber: metadata.episodeNumber,
+      releaseGroup: metadata.releaseGroup,
+      resolution: metadata.resolution,
+      subtitleLanguage: metadata.subtitleLanguage
+    }) as { id: number } | undefined;
+
+  return row?.id ?? null;
 }
 
 export function getJobForFeedItem(feedItemId: number) {
@@ -376,7 +507,7 @@ export function markJobAttempt(jobId: number, fields: Partial<DownloadJob>) {
     });
 }
 
-export function listJobs(limit = 100) {
+export function listJobs(limit = 200) {
   return getDb()
     .prepare("SELECT * FROM download_jobs ORDER BY updated_at DESC LIMIT ?")
     .all(limit)
@@ -427,8 +558,7 @@ export function findFeedItemsForSubscription(subscriptionId: number) {
     .prepare(
       `SELECT * FROM feed_items
        WHERE subscription_id = ?
-       ORDER BY first_seen_at DESC
-       LIMIT 500`
+       ORDER BY first_seen_at DESC, id DESC`
     )
     .all(subscriptionId)
     .map((row) => mapFeedItem(row as Record<string, unknown>));
@@ -441,8 +571,7 @@ export function findMetadataBySubscription(subscriptionId: number) {
        FROM release_metadata m
        JOIN feed_items f ON f.id = m.feed_item_id
        WHERE f.subscription_id = ?
-       ORDER BY f.first_seen_at DESC
-       LIMIT 500`
+       ORDER BY f.first_seen_at DESC, f.id DESC`
     )
     .all(subscriptionId)
     .map((row) => mapMetadata(row as Record<string, unknown>))
@@ -489,18 +618,303 @@ export function upsertEpisodeFile(input: {
     });
 }
 
-export function listEpisodeFiles(limit = 100) {
+export function listEpisodeFiles(limit = 200) {
   return getDb()
     .prepare("SELECT * FROM episode_files ORDER BY updated_at DESC LIMIT ?")
     .all(limit)
     .map((row) => mapEpisodeFile(row as Record<string, unknown>));
 }
 
-export function getDashboardData(): DashboardData {
+export function enqueueWorkerTask(input: {
+  type: WorkerTaskType;
+  subscriptionId?: number | null;
+  payload?: Record<string, unknown>;
+}) {
   const db = getDb();
+  const subscriptionId = input.subscriptionId ?? null;
+  const payloadJson = JSON.stringify(input.payload ?? {});
+  const dedupeKey =
+    typeof input.payload?.dedupeKey === "string" ? input.payload.dedupeKey : null;
+  const active = dedupeKey
+    ? (db
+        .prepare(
+          `SELECT * FROM worker_tasks
+           WHERE type = ?
+             AND payload_json = ?
+             AND status IN ('queued', 'running')
+           ORDER BY id DESC
+           LIMIT 1`
+        )
+        .get(input.type, payloadJson) as Record<string, unknown> | undefined)
+    : (db
+        .prepare(
+          `SELECT * FROM worker_tasks
+           WHERE type = ?
+             AND COALESCE(subscription_id, 0) = COALESCE(?, 0)
+             AND status IN ('queued', 'running')
+           ORDER BY id DESC
+           LIMIT 1`
+        )
+        .get(input.type, subscriptionId) as Record<string, unknown> | undefined);
+  if (active) return mapWorkerTask(active);
+
+  const result = db
+    .prepare(
+      `INSERT INTO worker_tasks (type, subscription_id, payload_json)
+       VALUES (?, ?, ?)`
+    )
+    .run(input.type, subscriptionId, payloadJson);
+
+  return getWorkerTask(Number(result.lastInsertRowid));
+}
+
+export function getWorkerTask(id: number) {
+  const row = getDb()
+    .prepare("SELECT * FROM worker_tasks WHERE id = ?")
+    .get(id) as Record<string, unknown> | undefined;
+  return row ? mapWorkerTask(row) : null;
+}
+
+export function listWorkerTasksByStatus(statuses: WorkerTaskStatus[]) {
+  if (statuses.length === 0) return [];
+  const placeholders = statuses.map(() => "?").join(", ");
+  return getDb()
+    .prepare(
+      `SELECT * FROM worker_tasks
+       WHERE status IN (${placeholders})
+       ORDER BY created_at ASC, id ASC`
+    )
+    .all(...statuses)
+    .map((row) => mapWorkerTask(row as Record<string, unknown>));
+}
+
+export function listWorkerTasks(limit = 200) {
+  return getDb()
+    .prepare(
+      `SELECT * FROM worker_tasks
+       ORDER BY updated_at DESC, id DESC
+       LIMIT ?`
+    )
+    .all(limit)
+    .map((row) => mapWorkerTask(row as Record<string, unknown>));
+}
+
+export function claimNextWorkerTask() {
+  const db = getDb();
+  const tx = db.transaction((): WorkerTask | null => {
+    const row = db
+      .prepare(
+        `SELECT * FROM worker_tasks
+         WHERE status = 'queued'
+         ORDER BY created_at ASC, id ASC
+         LIMIT 1`
+      )
+      .get() as Record<string, unknown> | undefined;
+    if (!row) return null;
+
+    const result = db.prepare(
+      `UPDATE worker_tasks SET
+        status = 'running',
+        attempts = attempts + 1,
+        started_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'queued'`
+    ).run(Number(row.id));
+    if (result.changes === 0) return null;
+
+    return getWorkerTask(Number(row.id));
+  });
+
+  return tx();
+}
+
+export function completeWorkerTask(id: number) {
+  getDb()
+    .prepare(
+      `UPDATE worker_tasks SET
+        status = 'completed',
+        error_message = NULL,
+        finished_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .run(id);
+}
+
+export function failWorkerTask(id: number, errorMessage: string) {
+  getDb()
+    .prepare(
+      `UPDATE worker_tasks SET
+        status = 'failed',
+        error_message = ?,
+        finished_at = CURRENT_TIMESTAMP,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+    .run(errorMessage, id);
+}
+
+export function requeueStaleWorkerTasks(maxRunningSeconds = 1800) {
+  return getDb()
+    .prepare(
+      `UPDATE worker_tasks SET
+        status = 'queued',
+        error_message = 'Previous run timed out',
+        updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'running'
+         AND datetime(updated_at) < datetime('now', ?)`
+    )
+    .run(`-${maxRunningSeconds} seconds`).changes;
+}
+
+export function resetRuntimeData() {
+  const db = getDb();
+  const tx = db.transaction(() => {
+    const workerTasks = db.prepare("DELETE FROM worker_tasks").run().changes;
+    const downloadJobs = db.prepare("DELETE FROM download_jobs").run().changes;
+    const episodeFiles = db.prepare("DELETE FROM episode_files").run().changes;
+    const releaseMetadata = db.prepare("DELETE FROM release_metadata").run().changes;
+    const feedItems = db.prepare("DELETE FROM feed_items").run().changes;
+    const subscriptionsTouched = db
+      .prepare("UPDATE subscriptions SET last_polled_at = NULL")
+      .run().changes;
+
+    return {
+      downloadJobs,
+      episodeFiles,
+      releaseMetadata,
+      feedItems,
+      workerTasks,
+      subscriptionsTouched
+    };
+  });
+
+  return tx();
+}
+
+export interface DashboardQueryInput {
+  episodeSubscriptionId?: string;
+  episodeSeason?: string;
+  episodeStatus?: string;
+  episodePage?: string;
+  episodePageSize?: string;
+}
+
+export function getDashboardData(input: DashboardQueryInput = {}): DashboardData {
   const subscriptions = listSubscriptions();
-  const rules = listRules();
-  const feedItems = db
+  const episodePage = getDashboardEpisodePage(input, subscriptions, listRules());
+  const activeWorkerTasks = listWorkerTasksByStatus(["queued", "running"]);
+  const stats = getDashboardStats(subscriptions, activeWorkerTasks.length);
+
+  return {
+    subscriptions,
+    rules: listRules(),
+    rssItems: [],
+    feedItems: [],
+    jobs: [],
+    workerTasks: listWorkerTasks(),
+    episodeFiles: [],
+    episodePage,
+    workerHealth: getWorkerHealth(),
+    stats
+  };
+}
+
+export function getDashboardEpisodePage(
+  input: DashboardQueryInput = {},
+  subscriptions = listSubscriptions(),
+  rules = listRules()
+): DashboardEpisodePage {
+  const query = normalizeEpisodeQuery(input);
+  const rows = listDashboardEpisodeRows(subscriptions, rules);
+  const requestedSeason = subscriptions.some(
+    (subscription) => subscription.seasonNumber === query.season
+  )
+    ? query.season
+    : null;
+  const subscriptionOptions = subscriptionOptionsForSubscriptions(
+    subscriptions,
+    requestedSeason
+  );
+  const validSubscriptionId = subscriptionOptions.some(
+    (option) => option.id === query.subscriptionId
+  )
+    ? query.subscriptionId
+    : subscriptionOptions.length === 1
+      ? subscriptionOptions[0].id
+      : null;
+  const seasonOptions = seasonOptionsForSubscriptions(
+    subscriptions,
+    validSubscriptionId
+  );
+  const validSeason =
+    query.season != null && seasonOptions.includes(query.season)
+      ? query.season
+      : seasonOptions.length === 1
+        ? seasonOptions[0]
+        : null;
+  const scopedRows = rows.filter(
+    (row) =>
+      (validSubscriptionId == null || row.subscriptionId === validSubscriptionId) &&
+      (validSeason == null || row.seasonNumber === validSeason)
+  );
+  const counts = {
+    all: scopedRows.length,
+    active: scopedRows.filter((row) => episodeStatusMatches(row, "active")).length,
+    completed: scopedRows.filter((row) => episodeStatusMatches(row, "completed")).length,
+    failed: scopedRows.filter((row) => episodeStatusMatches(row, "failed")).length,
+    waiting: scopedRows.filter((row) => episodeStatusMatches(row, "waiting")).length
+  };
+  const statusRows = scopedRows.filter((row) =>
+    episodeStatusMatches(row, query.status)
+  );
+  const total = statusRows.length;
+  const pageCount = Math.max(1, Math.ceil(total / query.pageSize));
+  const page = Math.min(query.page, pageCount);
+  const offset = (page - 1) * query.pageSize;
+
+  return {
+    rows: statusRows.slice(offset, offset + query.pageSize),
+    total,
+    page,
+    pageSize: query.pageSize,
+    pageCount,
+    filters: {
+      subscriptionId: validSubscriptionId,
+      season: validSeason,
+      status: query.status
+    },
+    counts,
+    subscriptionOptions,
+    seasonOptions
+  };
+}
+
+function subscriptionOptionsForSubscriptions(
+  subscriptions: Subscription[],
+  season: number | null
+) {
+  return subscriptions
+    .filter(
+      (subscription) =>
+        season == null || subscription.seasonNumber === season
+    )
+    .map((subscription) => ({
+      id: subscription.id,
+      name: subscription.name
+    }));
+}
+
+function listDashboardEpisodeRows(
+  subscriptions: Subscription[],
+  rules: FilterRule[]
+): DashboardEpisodeRow[] {
+  const db = getDb();
+  const subscriptionById = new Map(
+    subscriptions.map((subscription) => [subscription.id, subscription])
+  );
+
+  const rows = db
     .prepare(
       `SELECT
         f.*,
@@ -511,11 +925,9 @@ export function getDashboardData(): DashboardData {
         m.parsed_title,
         m.episode_number,
         m.episode_text,
+        m.release_revision,
         m.resolution,
         m.subtitle_language,
-        m.source,
-        m.codec,
-        m.audio,
         m.container,
         m.tags_json,
         m.parse_confidence,
@@ -528,138 +940,302 @@ export function getDashboardData(): DashboardData {
         j.error_message,
         j.attempts,
         j.created_at AS job_created_at,
-        j.updated_at AS job_updated_at
+        j.updated_at AS job_updated_at,
+        COALESCE(ef_feed.id, ef_episode.id) AS file_id,
+        COALESCE(ef_feed.subscription_id, ef_episode.subscription_id) AS file_subscription_id,
+        COALESCE(ef_feed.feed_item_id, ef_episode.feed_item_id) AS file_feed_item_id,
+        COALESCE(ef_feed.episode_number, ef_episode.episode_number) AS file_episode_number,
+        COALESCE(ef_feed.original_path, ef_episode.original_path) AS file_original_path,
+        COALESCE(ef_feed.final_path, ef_episode.final_path) AS file_final_path,
+        COALESCE(ef_feed.size_bytes, ef_episode.size_bytes) AS file_size_bytes,
+        COALESCE(ef_feed.status, ef_episode.status) AS file_status,
+        COALESCE(ef_feed.error_message, ef_episode.error_message) AS file_error_message,
+        COALESCE(ef_feed.created_at, ef_episode.created_at) AS file_created_at,
+        COALESCE(ef_feed.updated_at, ef_episode.updated_at) AS file_updated_at
       FROM feed_items f
       JOIN subscriptions s ON s.id = f.subscription_id
       LEFT JOIN release_metadata m ON m.feed_item_id = f.id
       LEFT JOIN download_jobs j ON j.feed_item_id = f.id
-      ORDER BY f.first_seen_at DESC
-      LIMIT 80`
+      LEFT JOIN episode_files ef_feed ON ef_feed.id = (
+        SELECT id FROM episode_files
+        WHERE feed_item_id = f.id
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      )
+      LEFT JOIN episode_files ef_episode ON ef_episode.id = (
+        SELECT id FROM episode_files
+        WHERE feed_item_id IS NULL
+          AND subscription_id = f.subscription_id
+          AND episode_number = m.episode_number
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      )
+      ORDER BY f.first_seen_at DESC, f.id DESC
+      `
     )
     .all()
-    .map((row) => {
+    .map((row): DashboardEpisodeRow | null => {
       const record = row as Record<string, unknown>;
-      return {
-        ...mapFeedItem(record),
-        subscriptionName: String(record.subscription_name),
-        metadata: mapMetadata(
-          record.metadata_id == null
-            ? null
-            : {
-                id: record.metadata_id,
-                feed_item_id: record.metadata_feed_item_id,
-                release_group: record.release_group,
-                parsed_title: record.parsed_title,
-                episode_number: record.episode_number,
-                episode_text: record.episode_text,
-                resolution: record.resolution,
-                subtitle_language: record.subtitle_language,
-                source: record.source,
-                codec: record.codec,
-                audio: record.audio,
-                container: record.container,
-                tags_json: record.tags_json,
-                parse_confidence: record.parse_confidence,
-                needs_review: record.needs_review
-              }
-        ),
-        job:
-          record.job_id == null
-            ? null
-            : mapJob({
-                id: record.job_id,
-                subscription_id: record.subscription_id,
-                feed_item_id: record.id,
-                status: record.job_status,
-                openlist_task_id: record.openlist_task_id,
-                source_url: record.source_url,
-                target_path: record.target_path,
-                error_message: record.error_message,
-                attempts: record.attempts,
-                created_at: record.job_created_at,
-                updated_at: record.job_updated_at
-              })
-      };
-    });
+      const metadata = mapMetadata(
+        record.metadata_id == null
+          ? null
+          : {
+              id: record.metadata_id,
+              feed_item_id: record.metadata_feed_item_id,
+              release_group: record.release_group,
+              parsed_title: record.parsed_title,
+              episode_number: record.episode_number,
+              episode_text: record.episode_text,
+              release_revision: record.release_revision,
+              resolution: record.resolution,
+              subtitle_language: record.subtitle_language,
+              container: record.container,
+              tags_json: record.tags_json,
+              parse_confidence: record.parse_confidence,
+              needs_review: record.needs_review
+            }
+      );
+      const item = mapFeedItem(record);
+      const job =
+        record.job_id == null
+          ? null
+          : mapJob({
+              id: record.job_id,
+              subscription_id: record.subscription_id,
+              feed_item_id: record.id,
+              status: record.job_status,
+              openlist_task_id: record.openlist_task_id,
+              source_url: record.source_url,
+              target_path: record.target_path,
+              error_message: record.error_message,
+              attempts: record.attempts,
+              created_at: record.job_created_at,
+              updated_at: record.job_updated_at
+            });
+      const decision = metadata
+        ? ruleDecisionForSubscription(
+            item.subscriptionId,
+            item.title,
+            metadata,
+            rules
+          )
+        : { allowed: true, reasons: [] };
+      if (!decision.allowed) return null;
 
-  const jobs = db
-    .prepare(
-      `SELECT
-        j.*,
-        s.name AS subscription_name,
-        f.title AS feed_title,
-        m.id AS metadata_id,
-        m.feed_item_id AS metadata_feed_item_id,
-        m.release_group,
-        m.parsed_title,
-        m.episode_number,
-        m.episode_text,
-        m.resolution,
-        m.subtitle_language,
-        m.source,
-        m.codec,
-        m.audio,
-        m.container,
-        m.tags_json,
-        m.parse_confidence,
-        m.needs_review
-      FROM download_jobs j
-      JOIN subscriptions s ON s.id = j.subscription_id
-      JOIN feed_items f ON f.id = j.feed_item_id
-      LEFT JOIN release_metadata m ON m.feed_item_id = f.id
-      ORDER BY j.updated_at DESC
-      LIMIT 100`
-    )
-    .all()
-    .map((row) => {
-      const record = row as Record<string, unknown>;
+      const subscription = subscriptionById.get(item.subscriptionId);
+      const file = mapEpisodeFileFromEpisodeRow(record);
+      const updatedAt = latestDate([
+        job?.updatedAt,
+        file?.updatedAt,
+        item.publishedAt,
+        item.firstSeenAt
+      ]);
       return {
-        ...mapJob(record),
+        id: `feed:${item.id}`,
+        subscriptionId: item.subscriptionId,
         subscriptionName: String(record.subscription_name),
-        feedTitle: String(record.feed_title),
-        metadata: mapMetadata(
-          record.metadata_id == null
-            ? null
-            : {
-                id: record.metadata_id,
-                feed_item_id: record.metadata_feed_item_id,
-                release_group: record.release_group,
-                parsed_title: record.parsed_title,
-                episode_number: record.episode_number,
-                episode_text: record.episode_text,
-                resolution: record.resolution,
-                subtitle_language: record.subtitle_language,
-                source: record.source,
-                codec: record.codec,
-                audio: record.audio,
-                container: record.container,
-                tags_json: record.tags_json,
-                parse_confidence: record.parse_confidence,
-                needs_review: record.needs_review
-              }
-        )
+        title: item.title,
+        item,
+        job,
+        metadata,
+        files: file ? [file] : [],
+        seasonNumber: subscription?.seasonNumber ?? null,
+        episodeNumber: metadata?.episodeNumber ?? null,
+        episodeText: metadata?.episodeText ?? null,
+        updatedAt
       };
-    });
+    })
+    .filter((row): row is DashboardEpisodeRow => Boolean(row));
 
-  const stats = {
-    activeSubscriptions: subscriptions.filter((item) => item.enabled).length,
-    queuedJobs: jobs.filter((item) =>
-      ["queued", "downloading", "ready_to_rename"].includes(item.status)
-    ).length,
-    needsReview:
-      jobs.filter((item) => item.status === "needs_review").length +
-      feedItems.filter((item) => item.metadata?.needsReview).length,
-    completedJobs: jobs.filter((item) => item.status === "completed").length
+  return dedupePreferredEpisodeVariants(rows).sort(
+    (left, right) => dateMs(right.updatedAt) - dateMs(left.updatedAt)
+  );
+}
+
+function dedupePreferredEpisodeVariants(rows: DashboardEpisodeRow[]) {
+  const keyed = new Map<string, DashboardEpisodeRow>();
+  const unkeyed: DashboardEpisodeRow[] = [];
+
+  for (const row of rows) {
+    const key = episodeVariantKey(row);
+    if (!key) {
+      unkeyed.push(row);
+      continue;
+    }
+
+    const previous = keyed.get(key);
+    if (!previous || comparePreferredEpisodeVariant(row, previous) > 0) {
+      keyed.set(key, row);
+    }
+  }
+
+  return [...unkeyed, ...keyed.values()];
+}
+
+function episodeVariantKey(row: DashboardEpisodeRow) {
+  if (row.episodeNumber == null) return null;
+  return [
+    row.subscriptionId,
+    row.seasonNumber ?? "",
+    row.episodeNumber,
+    normalizedVariantPart(row.metadata?.releaseGroup),
+    normalizedVariantPart(row.metadata?.resolution),
+    normalizedVariantPart(row.metadata?.subtitleLanguage)
+  ].join("|");
+}
+
+function comparePreferredEpisodeVariant(
+  left: DashboardEpisodeRow,
+  right: DashboardEpisodeRow
+) {
+  const revisionDelta =
+    (left.metadata?.releaseRevision ?? 1) - (right.metadata?.releaseRevision ?? 1);
+  if (revisionDelta !== 0) return revisionDelta;
+  const dateDelta = dateMs(left.updatedAt) - dateMs(right.updatedAt);
+  if (dateDelta !== 0) return dateDelta;
+  return feedId(left) - feedId(right);
+}
+
+function feedId(row: DashboardEpisodeRow) {
+  return row.item?.id ?? 0;
+}
+
+function normalizedVariantPart(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function normalizeEpisodeQuery(input: DashboardQueryInput) {
+  return {
+    subscriptionId: positiveNumberOrNull(input.episodeSubscriptionId),
+    season: positiveNumberOrNull(input.episodeSeason),
+    status: normalizeEpisodeStatus(input.episodeStatus),
+    page: Math.max(1, Number(input.episodePage) || 1),
+    pageSize: normalizeEpisodePageSize(input.episodePageSize)
   };
+}
+
+function positiveNumberOrNull(value: string | undefined) {
+  const number = Number(value);
+  return Number.isInteger(number) && number > 0 ? number : null;
+}
+
+function normalizeEpisodeStatus(value: string | undefined): EpisodeStatusFilter {
+  return ["active", "completed", "failed", "waiting"].includes(value ?? "")
+    ? (value as EpisodeStatusFilter)
+    : "all";
+}
+
+function normalizeEpisodePageSize(value: string | undefined) {
+  const number = Number(value);
+  return [10, 20, 50].includes(number) ? number : 20;
+}
+
+function seasonOptionsForSubscriptions(
+  subscriptions: Subscription[],
+  subscriptionId: number | null
+) {
+  return Array.from(
+    new Set(
+      subscriptions
+        .filter(
+          (subscription) =>
+            subscriptionId == null || subscription.id === subscriptionId
+        )
+        .map((subscription) => subscription.seasonNumber)
+    )
+  ).sort((left, right) => left - right);
+}
+
+function episodeStatusMatches(
+  row: DashboardEpisodeRow,
+  status: EpisodeStatusFilter
+) {
+  if (status === "all") return true;
+  const failedFile = row.files.some((file) => file.status === "failed");
+  const renamedFile = row.files.some((file) => file.status === "renamed");
+  if (status === "completed") return renamedFile || row.job?.status === "completed";
+  if (status === "failed") return failedFile || row.job?.status === "failed";
+  if (status === "waiting") {
+    return row.job?.status === "needs_review";
+  }
+  return (
+    row.job?.status === "queued" ||
+    row.job?.status === "downloading" ||
+    row.job?.status === "ready_to_rename"
+  );
+}
+
+function mapEpisodeFileFromEpisodeRow(record: Record<string, unknown>) {
+  if (record.file_id == null) return null;
+  return mapEpisodeFile({
+    id: record.file_id,
+    subscription_id: record.file_subscription_id,
+    feed_item_id: record.file_feed_item_id,
+    episode_number: record.file_episode_number,
+    original_path: record.file_original_path,
+    final_path: record.file_final_path,
+    size_bytes: record.file_size_bytes,
+    status: record.file_status,
+    error_message: record.file_error_message,
+    created_at: record.file_created_at,
+    updated_at: record.file_updated_at
+  });
+}
+
+function getDashboardStats(
+  subscriptions: Subscription[],
+  activeWorkerTaskCount: number
+): DashboardData["stats"] {
+  const db = getDb();
+  const queuedJobs = db
+    .prepare(
+      `SELECT COUNT(*) AS count
+       FROM download_jobs
+       WHERE status IN ('queued', 'downloading', 'ready_to_rename')`
+    )
+    .get() as { count: number };
+  const needsReviewJobs = db
+    .prepare("SELECT COUNT(*) AS count FROM download_jobs WHERE status = 'needs_review'")
+    .get() as { count: number };
+  const completedJobs = db
+    .prepare("SELECT COUNT(*) AS count FROM download_jobs WHERE status = 'completed'")
+    .get() as { count: number };
 
   return {
-    subscriptions,
-    rules,
-    feedItems,
-    jobs,
-    episodeFiles: listEpisodeFiles(),
-    stats
+    activeSubscriptions: subscriptions.filter((item) => item.enabled).length,
+    queuedJobs: Number(queuedJobs.count),
+    workerTasks: activeWorkerTaskCount,
+    needsReview: Number(needsReviewJobs.count),
+    completedJobs: Number(completedJobs.count)
   };
+}
+
+function latestDate(values: Array<string | null | undefined>) {
+  return values
+    .filter((value): value is string => Boolean(value))
+    .sort((left, right) => dateMs(right) - dateMs(left))[0] ?? null;
+}
+
+function dateMs(value?: string | null) {
+  if (!value) return 0;
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)
+    ? `${value.replace(" ", "T")}Z`
+    : value;
+  const time = new Date(normalized).getTime();
+  return Number.isNaN(time) ? 0 : time;
+}
+
+function ruleDecisionForSubscription(
+  subscriptionId: number,
+  title: string,
+  metadata: ReleaseMetadata,
+  rules: FilterRule[]
+) {
+  const subscriptionRules = rules.filter(
+    (rule) => rule.subscriptionId === subscriptionId && rule.enabled
+  );
+  if (subscriptionRules.length === 0) return { allowed: true, reasons: [] };
+  return evaluateRules(title, metadata, subscriptionRules);
 }
 
 function normalizeSubscriptionInput(input: SubscriptionInput) {
@@ -676,16 +1252,13 @@ function normalizeSubscriptionInput(input: SubscriptionInput) {
 }
 
 function normalizeSystemSettings(input: SystemSettings): SystemSettings {
+  const incomingPath =
+    input.openlistIncomingPath.trim() || defaultSystemSettings.openlistIncomingPath;
   return {
     openlistBaseUrl: trimTrailingSlash(input.openlistBaseUrl.trim()),
     openlistToken: input.openlistToken.trim(),
     openlist115Mode: normalize115Mode(input.openlist115Mode),
-    openlist115TempDir:
-      input.openlist115TempDir.trim() ||
-      input.openlistIncomingPath.trim() ||
-      defaultSystemSettings.openlist115TempDir,
-    openlistIncomingPath:
-      input.openlistIncomingPath.trim() || defaultSystemSettings.openlistIncomingPath,
+    openlistIncomingPath: incomingPath,
     mediaLibraryRoot:
       input.mediaLibraryRoot.trim() || defaultSystemSettings.mediaLibraryRoot,
     seasonPathTemplate:
@@ -693,6 +1266,7 @@ function normalizeSystemSettings(input: SystemSettings): SystemSettings {
     episodeFileTemplate:
       input.episodeFileTemplate.trim() ||
       "{title} - S{season_pad}E{episode_pad}.{ext}",
+    replaceExistingOnRevision: Boolean(input.replaceExistingOnRevision),
     proxyEnabled: Boolean(input.proxyEnabled),
     proxyUrl: normalizeProxyUrl(input.proxyUrl),
     tmdbBearerToken: input.tmdbBearerToken.trim(),
@@ -706,15 +1280,6 @@ function normalize115Mode(value: unknown): SystemSettings["openlist115Mode"] {
 
 function trimTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
-}
-
-function legacyProxyUrl(values: Map<string, string>) {
-  return (
-    values.get("httpsProxy") ||
-    values.get("httpProxy") ||
-    values.get("allProxy") ||
-    undefined
-  );
 }
 
 function normalizeProxyUrl(value: string) {

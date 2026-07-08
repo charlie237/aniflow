@@ -16,6 +16,22 @@ export type RuleType =
   | "keyword_include"
   | "keyword_exclude";
 
+export type WorkerTaskType =
+  | "poll_all"
+  | "poll_subscription"
+  | "cleanup_subscription_incoming"
+  | "scan_incoming"
+  | "submit_queued";
+
+export type WorkerTaskStatus = "queued" | "running" | "completed" | "failed";
+
+export type EpisodeStatusFilter =
+  | "all"
+  | "active"
+  | "completed"
+  | "failed"
+  | "waiting";
+
 export interface Subscription {
   id: number;
   name: string;
@@ -44,6 +60,7 @@ export interface FeedItem {
   id: number;
   subscriptionId: number;
   guid: string;
+  rssGuid: string | null;
   title: string;
   link: string | null;
   downloadUrl: string | null;
@@ -59,11 +76,9 @@ export interface ReleaseMetadata {
   parsedTitle: string | null;
   episodeNumber: number | null;
   episodeText: string | null;
+  releaseRevision: number;
   resolution: string | null;
   subtitleLanguage: string | null;
-  source: string | null;
-  codec: string | null;
-  audio: string | null;
   container: string | null;
   tags: string[];
   parseConfidence: number;
@@ -98,15 +113,70 @@ export interface EpisodeFile {
   updatedAt: string;
 }
 
+export interface WorkerTask {
+  id: number;
+  type: WorkerTaskType;
+  subscriptionId: number | null;
+  status: WorkerTaskStatus;
+  payloadJson: string;
+  errorMessage: string | null;
+  attempts: number;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+}
+
+export interface WorkerHealth {
+  lastSeenAt: string | null;
+  secondsSinceLastSeen: number | null;
+  staleAfterSeconds: number;
+  ok: boolean;
+}
+
+export interface DashboardEpisodeRow {
+  id: string;
+  subscriptionId: number;
+  subscriptionName: string;
+  title: string;
+  item: FeedItem | null;
+  job: DownloadJob | null;
+  metadata: ReleaseMetadata | null;
+  files: EpisodeFile[];
+  seasonNumber: number | null;
+  episodeNumber: number | null;
+  episodeText: string | null;
+  updatedAt: string | null;
+}
+
+export interface DashboardEpisodePage {
+  rows: DashboardEpisodeRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  filters: {
+    subscriptionId: number | null;
+    season: number | null;
+    status: EpisodeStatusFilter;
+  };
+  counts: Record<EpisodeStatusFilter, number>;
+  subscriptionOptions: Array<{
+    id: number;
+    name: string;
+  }>;
+  seasonOptions: number[];
+}
+
 export interface SystemSettings {
   openlistBaseUrl: string;
   openlistToken: string;
   openlist115Mode: "115 Cloud" | "115 Open";
-  openlist115TempDir: string;
   openlistIncomingPath: string;
   mediaLibraryRoot: string;
   seasonPathTemplate: string;
   episodeFileTemplate: string;
+  replaceExistingOnRevision: boolean;
   proxyEnabled: boolean;
   proxyUrl: string;
   tmdbBearerToken: string;
@@ -116,6 +186,15 @@ export interface SystemSettings {
 export interface DashboardData {
   subscriptions: Subscription[];
   rules: FilterRule[];
+  rssItems: Array<
+    FeedItem & {
+      subscriptionName: string;
+      metadata: ReleaseMetadata | null;
+      job: DownloadJob | null;
+      ruleAllowed: boolean;
+      ruleReasons: string[];
+    }
+  >;
   feedItems: Array<
     FeedItem & {
       subscriptionName: string;
@@ -130,10 +209,14 @@ export interface DashboardData {
       metadata: ReleaseMetadata | null;
     }
   >;
+  workerTasks: WorkerTask[];
   episodeFiles: EpisodeFile[];
+  episodePage: DashboardEpisodePage;
+  workerHealth: WorkerHealth;
   stats: {
     activeSubscriptions: number;
     queuedJobs: number;
+    workerTasks: number;
     needsReview: number;
     completedJobs: number;
   };

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   add115OfflineDownload,
   configure115TempDir,
-  moveOpenListFiles
+  moveOpenListFiles,
+  removeOpenListFiles
 } from "@/lib/openlist/client";
 
 const settingsMock = vi.hoisted(() => ({
@@ -10,11 +11,11 @@ const settingsMock = vi.hoisted(() => ({
     openlistBaseUrl: "http://openlist.local",
     openlistToken: "token-1",
     openlist115Mode: "115 Cloud" as "115 Cloud" | "115 Open",
-    openlist115TempDir: "/115/anime/_incoming",
-    openlistIncomingPath: "/115/anime/_incoming",
-    mediaLibraryRoot: "/115/anime",
+    openlistIncomingPath: "/115/Anime/_incoming",
+    mediaLibraryRoot: "/115/Anime",
     seasonPathTemplate: "{title}/Season {season_pad}",
     episodeFileTemplate: "{title} - S{season_pad}E{episode_pad}.{ext}",
+    replaceExistingOnRevision: true,
     proxyEnabled: false,
     proxyUrl: "http://127.0.0.1:7890",
     tmdbBearerToken: "",
@@ -46,7 +47,7 @@ describe("OpenList client", () => {
 
     const tasks = await add115OfflineDownload({
       urls: ["magnet:?xt=urn:btih:abc"],
-      path: "/115/_incoming"
+      path: "/115/Anime/_incoming"
     });
 
     expect(tasks[0]?.id).toBe("task-1");
@@ -56,7 +57,7 @@ describe("OpenList client", () => {
         method: "POST",
         body: JSON.stringify({
           urls: ["magnet:?xt=urn:btih:abc"],
-          path: "/115/_incoming",
+          path: "/115/Anime/_incoming",
           tool: "115 Cloud",
           delete_policy: "delete_never"
         })
@@ -72,13 +73,13 @@ describe("OpenList client", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    await configure115TempDir("/115/anime/_incoming");
+    await configure115TempDir("/115/Anime/_incoming");
 
     expect(fetchMock).toHaveBeenCalledWith(
       "http://openlist.local/api/admin/setting/set_115_open",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ temp_dir: "/115/anime/_incoming" })
+        body: JSON.stringify({ temp_dir: "/115/Anime/_incoming" })
       })
     );
   });
@@ -91,7 +92,7 @@ describe("OpenList client", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await moveOpenListFiles({
-      srcDir: "/115/_incoming",
+      srcDir: "/115/Anime/_incoming",
       dstDir: "/Anime/Show/Season 01",
       names: ["Show - S01E01.mkv"]
     });
@@ -101,10 +102,34 @@ describe("OpenList client", () => {
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
-          src_dir: "/115/_incoming",
+          src_dir: "/115/Anime/_incoming",
           dst_dir: "/Anime/Show/Season 01",
           names: ["Show - S01E01.mkv"],
           overwrite: false
+        })
+      })
+    );
+  });
+
+  it("removes files with OpenList fs remove", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ code: 200, data: {} })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await removeOpenListFiles({
+      dir: "/115/Anime/_incoming",
+      names: ["empty-folder"]
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://openlist.local/api/fs/remove",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          dir: "/115/Anime/_incoming",
+          names: ["empty-folder"]
         })
       })
     );

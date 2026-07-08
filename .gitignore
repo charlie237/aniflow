@@ -3,6 +3,7 @@ node_modules
 dist
 coverage
 .playwright-cli
+/.data
 data/*.sqlite
 data/*.sqlite-*
 .env

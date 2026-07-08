@@ -1,6 +1,5 @@
 import { AppShell } from "@/components/app-shell";
 import { RssPreviewPanel } from "@/components/rss-preview-panel";
-import { RuleForm } from "@/components/rule-form";
 import { SubscriptionForm } from "@/components/subscription-form";
 import {
   getSystemSettings,
@@ -29,6 +28,7 @@ export default async function SubscriptionsPage({
   }
 
   const subscriptions = listSubscriptions();
+  const rules = listRules();
   const settings = getSystemSettings();
 
   return (
@@ -42,14 +42,12 @@ export default async function SubscriptionsPage({
         </section>
 
         <RssPreviewPanel preview={preview} error={error} initialUrl={rssUrl} />
-        <div className="grid gap-5 xl:grid-cols-[1.15fr_0.85fr]">
-          <SubscriptionForm
-            subscriptions={subscriptions}
-            preview={preview}
-            defaultIncomingPath={settings.openlistIncomingPath}
-          />
-          <RuleForm subscriptions={subscriptions} rules={listRules()} />
-        </div>
+        <SubscriptionForm
+          subscriptions={subscriptions}
+          rules={rules}
+          preview={preview}
+          defaultIncomingPath={settings.openlistIncomingPath}
+        />
       </div>
     </AppShell>
   );

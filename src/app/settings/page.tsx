@@ -8,9 +8,9 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage({
   searchParams
 }: {
-  searchParams: Promise<{ check?: string }>;
+  searchParams: Promise<{ check?: string; reset?: string }>;
 }) {
-  const { check } = await searchParams;
+  const { check, reset } = await searchParams;
   return (
     <AppShell>
       <div className="mx-auto grid w-full max-w-5xl gap-5 px-4 py-6 md:px-6">
@@ -23,6 +23,7 @@ export default async function SettingsPage({
         <SettingsForm
           settings={getSystemSettings()}
           checkResult={parseCheckResult(check)}
+          resetStatus={parseResetStatus(reset)}
         />
       </div>
     </AppShell>
@@ -40,4 +41,8 @@ function parseCheckResult(value: string | undefined): OpenList115CheckResult | n
   } catch {
     return null;
   }
+}
+
+function parseResetStatus(value: string | undefined) {
+  return value === "runtime" || value === "confirm" ? value : null;
 }

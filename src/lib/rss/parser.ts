@@ -3,12 +3,18 @@ import { parseReleaseTitle, type ParsedReleaseTitle } from "@/lib/rss/title-pars
 
 export interface ParsedRssItem {
   guid: string;
+  rssGuid: string | null;
   title: string;
   link: string | null;
   downloadUrl: string | null;
   publishedAt: string | null;
   rawXmlJson: string;
   metadata: ParsedReleaseTitle;
+}
+
+export interface ParsedRssFeed {
+  title: string | null;
+  items: ParsedRssItem[];
 }
 
 const parser = new XMLParser({
@@ -19,15 +25,23 @@ const parser = new XMLParser({
 });
 
 export function parseRss(xml: string): ParsedRssItem[] {
+  return parseRssFeed(xml).items;
+}
+
+export function parseRssFeed(xml: string): ParsedRssFeed {
   const parsed = parser.parse(xml) as Record<string, unknown>;
   const channel = getObject(getObject(parsed.rss)?.channel);
+  const feed = getObject(parsed.feed);
   const rssItems = toArray(channel?.item);
-  const atomItems = toArray(getObject(parsed.feed)?.entry);
+  const atomItems = toArray(feed?.entry);
   const items = rssItems.length > 0 ? rssItems : atomItems;
 
-  return items
-    .map((item) => normalizeItem(getObject(item)))
-    .filter((item): item is ParsedRssItem => Boolean(item));
+  return {
+    title: textOf(channel?.title) ?? textOf(feed?.title),
+    items: items
+      .map((item) => normalizeItem(getObject(item)))
+      .filter((item): item is ParsedRssItem => Boolean(item))
+  };
 }
 
 function normalizeItem(item: Record<string, unknown> | null): ParsedRssItem | null {
@@ -35,13 +49,15 @@ function normalizeItem(item: Record<string, unknown> | null): ParsedRssItem | nu
   const title = textOf(item.title) ?? "Untitled release";
   const link = extractLink(item);
   const downloadUrl = extractDownloadUrl(item, link);
-  const guid = textOf(item.guid) ?? textOf(item.id) ?? downloadUrl ?? link ?? title;
+  const rssGuid = textOf(item.guid) ?? textOf(item.id);
+  const guid = rssGuid ?? downloadUrl ?? link ?? title;
   const publishedAt = normalizeDate(
     textOf(item.pubDate) ?? textOf(item.published) ?? textOf(item.updated)
   );
 
   return {
     guid,
+    rssGuid,
     title,
     link,
     downloadUrl,

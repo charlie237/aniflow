@@ -7,11 +7,9 @@ const metadata: Omit<ReleaseMetadata, "id" | "feedItemId"> = {
   parsedTitle: "Test Anime",
   episodeNumber: 1,
   episodeText: "01",
+  releaseRevision: 1,
   resolution: "1080p",
   subtitleLanguage: "CHS",
-  source: "WEBRIP",
-  codec: "HEVC",
-  audio: "AAC",
   container: "mkv",
   tags: ["GroupA", "1080p", "CHS"],
   parseConfidence: 95,
@@ -42,10 +40,10 @@ describe("evaluateRules", () => {
 
   it("blocks excluded keywords", () => {
     const decision = evaluateRules("Test Anime AVC", metadata, [
-      rule("keyword_exclude", "HEVC")
+      rule("keyword_exclude", "AVC")
     ]);
 
     expect(decision.allowed).toBe(false);
-    expect(decision.reasons[0]).toContain("HEVC");
+    expect(decision.reasons[0]).toContain("AVC");
   });
 });

@@ -26,7 +26,7 @@ export async function POST(request: Request) {
     name: body.name,
     rssUrl: body.rssUrl,
     seasonNumber: body.seasonNumber ?? 1,
-    destinationRoot: body.destinationRoot ?? "/115/anime",
+    destinationRoot: body.destinationRoot ?? "/115/Anime",
     incomingPath: body.incomingPath ?? null,
     tmdbSeriesId: body.tmdbSeriesId ?? null
   });

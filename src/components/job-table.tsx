@@ -78,7 +78,7 @@ export function JobTable({ jobs }: { jobs: DashboardData["jobs"] }) {
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
-                      {job.status === "failed" || job.status === "skipped" ? (
+                      {job.status === "failed" ? (
                         <form action={retryJobAction}>
                           <input type="hidden" name="id" value={job.id} />
                           <Button size="icon" variant="ghost" aria-label="重试">

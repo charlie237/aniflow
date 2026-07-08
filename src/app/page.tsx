@@ -1,7 +1,14 @@
-import { Activity, DownloadCloud, Play, RotateCw, Tags } from "lucide-react";
-import { pollSubscriptionAction, submitQueueAction } from "@/app/actions";
+import {
+  Activity,
+  FolderSync,
+  RotateCw,
+  ServerCrash
+} from "lucide-react";
+import {
+  pollSelectedSubscriptionAction,
+  scanIncomingAction
+} from "@/app/actions";
 import { AppShell } from "@/components/app-shell";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -9,17 +16,28 @@ import {
   CardDescription,
   CardHeader
 } from "@/components/ui/card";
-import { FileTable } from "@/components/file-table";
-import { JobTable } from "@/components/job-table";
-import { ReleaseTable } from "@/components/release-table";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { EpisodeTable } from "@/components/episode-table";
+import { WorkerTaskTable } from "@/components/worker-task-table";
 import { getDashboardData } from "@/lib/db/repositories";
 import { formatDateTime } from "@/lib/utils";
+import type { DashboardQueryInput } from "@/lib/db/repositories";
+import type { WorkerHealth } from "@/lib/db/types";
 
 export const dynamic = "force-dynamic";
 
-export default function HomePage() {
-  const data = getDashboardData();
+type HomePageSearchParams = Promise<
+  Record<string, string | string[] | undefined>
+>;
+
+export default async function HomePage({
+  searchParams
+}: {
+  searchParams: HomePageSearchParams;
+}) {
+  const params = await searchParams;
+  const data = getDashboardData(toDashboardQuery(params));
+  const enabledSubscriptions = data.subscriptions.filter((subscription) => subscription.enabled);
+  const defaultPollTarget = enabledSubscriptions[0]?.id.toString() ?? "all";
 
   return (
     <AppShell>
@@ -39,48 +57,50 @@ export default function HomePage() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <form action={submitQueueAction}>
-                <Button variant="outline">
-                  <DownloadCloud className="size-4" />
-                  提交队列
+              <form
+                action={pollSelectedSubscriptionAction}
+                className="flex flex-wrap gap-2"
+              >
+                <select
+                  name="subscriptionId"
+                  defaultValue={defaultPollTarget}
+                  className="h-9 min-w-[180px] rounded-[var(--radius)] border border-[var(--line)] bg-white px-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
+                >
+                  {enabledSubscriptions.map((subscription) => (
+                    <option key={subscription.id} value={subscription.id}>
+                      {subscription.name} / S{String(subscription.seasonNumber).padStart(2, "0")}
+                    </option>
+                  ))}
+                  <option value="all">全部订阅</option>
+                </select>
+                <Button variant="signal">
+                  <RotateCw className="size-4" />
+                  轮询并提交
                 </Button>
               </form>
-              {data.subscriptions.map((subscription) => (
-                <form key={subscription.id} action={pollSubscriptionAction}>
-                  <input type="hidden" name="id" value={subscription.id} />
-                  <Button variant="signal">
-                    <RotateCw className="size-4" />
-                    轮询 {subscription.name}
-                  </Button>
-                </form>
-              ))}
+              <form action={scanIncomingAction}>
+                <Button variant="outline">
+                  <FolderSync className="size-4" />
+                  扫描整理
+                </Button>
+              </form>
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="grid gap-3 md:grid-cols-5">
             <Stat label="启用订阅" value={data.stats.activeSubscriptions} />
-            <Stat label="队列任务" value={data.stats.queuedJobs} />
-            <Stat label="待确认" value={data.stats.needsReview} />
+            <Stat label="进行中" value={data.stats.queuedJobs} />
+            <Stat label="后台任务" value={data.stats.workerTasks} />
+            <Stat label="待处理" value={data.stats.needsReview} />
             <Stat label="已完成" value={data.stats.completedJobs} />
           </div>
         </div>
       </section>
 
       <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-6">
-        <Tabs defaultValue="episodes">
-          <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-            <TabsList>
-              <TabsTrigger value="episodes">
-                <Tags className="mr-2 size-4" />
-                发布
-              </TabsTrigger>
-              <TabsTrigger value="jobs">
-                <Play className="mr-2 size-4" />
-                任务
-              </TabsTrigger>
-              <TabsTrigger value="files">文件</TabsTrigger>
-            </TabsList>
-            <div className="text-xs text-[var(--muted)]">
+        <div className="grid gap-4">
+          <div className="flex flex-col justify-between gap-2 text-xs text-[var(--muted)] md:flex-row md:items-center">
+            <div>
               最新轮询：
               <span className="data-digits ml-1">
                 {formatDateTime(
@@ -92,20 +112,63 @@ export default function HomePage() {
                 )}
               </span>
             </div>
+            <div>
+              Worker 心跳：
+              <span className="data-digits ml-1">
+                {formatDateTime(data.workerHealth.lastSeenAt)}
+              </span>
+            </div>
           </div>
-
-          <TabsContent value="episodes">
-            <ReleaseTable items={data.feedItems} />
-          </TabsContent>
-          <TabsContent value="jobs">
-            <JobTable jobs={data.jobs} />
-          </TabsContent>
-          <TabsContent value="files">
-            <FileTable files={data.episodeFiles} />
-          </TabsContent>
-        </Tabs>
+          <WorkerHealthNotice health={data.workerHealth} />
+          <EpisodeTable pageData={data.episodePage} />
+          <WorkerTaskTable
+            tasks={data.workerTasks}
+            subscriptions={data.subscriptions}
+          />
+        </div>
       </div>
     </AppShell>
+  );
+}
+
+function toDashboardQuery(
+  params: Awaited<HomePageSearchParams>
+): DashboardQueryInput {
+  return {
+    episodeSubscriptionId: firstParam(params.episodeSubscriptionId),
+    episodeSeason: firstParam(params.episodeSeason),
+    episodeStatus: firstParam(params.episodeStatus),
+    episodePage: firstParam(params.episodePage),
+    episodePageSize: firstParam(params.episodePageSize)
+  };
+}
+
+function firstParam(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function WorkerHealthNotice({ health }: { health: WorkerHealth }) {
+  if (health.ok) return null;
+
+  return (
+    <div className="flex flex-col gap-2 rounded-[var(--radius)] border border-[#d9770640] bg-[#d9770612] px-3 py-3 text-sm md:flex-row md:items-center md:justify-between">
+      <div className="flex min-w-0 items-start gap-2">
+        <ServerCrash className="mt-0.5 size-4 shrink-0 text-[var(--accent)]" />
+        <div>
+          <div className="font-medium text-[var(--foreground)]">
+            后台 worker 没有在线心跳
+          </div>
+          <div className="mt-1 text-xs text-[var(--muted)]">
+            常驻轮询需要单独运行 <span className="data-digits">npm run worker</span>。
+          </div>
+        </div>
+      </div>
+      <div className="data-digits text-xs text-[var(--muted)]">
+        {health.lastSeenAt
+          ? `${formatAge(health.secondsSinceLastSeen)} 未心跳`
+          : "从未心跳"}
+      </div>
+    </div>
   );
 }
 
@@ -118,11 +181,15 @@ function Stat({ label, value }: { label: string; value: number }) {
       <CardContent>
         <div className="scanline rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] px-3 py-2">
           <span className="data-digits text-3xl font-semibold">{value}</span>
-          <Badge className="ml-2" variant={value > 0 ? "signal" : "muted"}>
-            live
-          </Badge>
         </div>
       </CardContent>
     </Card>
   );
+}
+
+function formatAge(seconds: number | null) {
+  if (seconds == null) return "未知";
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+  return `${Math.floor(seconds / 3600)}h`;
 }

@@ -8,6 +8,8 @@ export interface FetchTextOptions {
   timeoutMs?: number;
 }
 
+export type FetchBytesOptions = FetchTextOptions;
+
 export async function fetchText(url: string, options: FetchTextOptions = {}) {
   const proxy = await proxyForUrl();
   if (proxy) {
@@ -27,6 +29,25 @@ export async function fetchText(url: string, options: FetchTextOptions = {}) {
   }
 }
 
+export async function fetchBytes(url: string, options: FetchBytesOptions = {}) {
+  const proxy = await proxyForUrl();
+  if (proxy) {
+    return fetchBytesViaProxy(url, proxy, options);
+  }
+
+  try {
+    const response = await fetch(url, {
+      headers: options.headers,
+      cache: "no-store",
+      signal: AbortSignal.timeout(options.timeoutMs ?? 20000)
+    });
+    const body = Buffer.from(await response.arrayBuffer());
+    return { ok: response.ok, status: response.status, body };
+  } catch (error) {
+    throw enrichFetchError(url, error);
+  }
+}
+
 function fetchTextViaProxy(
   targetUrl: string,
   proxyUrl: string,
@@ -37,6 +58,18 @@ function fetchTextViaProxy(
   return target.protocol === "https:"
     ? fetchHttpsTextViaProxy(target, proxy, options)
     : fetchHttpTextViaProxy(target, proxy, options);
+}
+
+function fetchBytesViaProxy(
+  targetUrl: string,
+  proxyUrl: string,
+  options: FetchBytesOptions
+) {
+  const target = new URL(targetUrl);
+  const proxy = new URL(proxyUrl);
+  return target.protocol === "https:"
+    ? fetchHttpsBytesViaProxy(target, proxy, options)
+    : fetchHttpBytesViaProxy(target, proxy, options);
 }
 
 function fetchHttpTextViaProxy(
@@ -69,6 +102,42 @@ function fetchHttpTextViaProxy(
     });
     request.end();
   });
+}
+
+function fetchHttpBytesViaProxy(
+  target: URL,
+  proxy: URL,
+  options: FetchBytesOptions
+) {
+  return new Promise<{ ok: boolean; status: number; body: Buffer }>(
+    (resolve, reject) => {
+      const request = httpRequest(
+        {
+          protocol: proxy.protocol,
+          hostname: proxy.hostname,
+          port: proxy.port || "80",
+          method: "GET",
+          path: target.toString(),
+          headers: {
+            Host: target.host,
+            ...options.headers,
+            ...proxyAuthorizationHeader(proxy)
+          },
+          timeout: options.timeoutMs ?? 20000
+        },
+        (response) => {
+          collectBinaryBody(response, resolve);
+        }
+      );
+      request.on("error", (error) =>
+        reject(enrichFetchError(target.toString(), error))
+      );
+      request.on("timeout", () => {
+        request.destroy(new Error("request timed out"));
+      });
+      request.end();
+    }
+  );
 }
 
 function fetchHttpsTextViaProxy(
@@ -143,6 +212,80 @@ function fetchHttpsTextViaProxy(
   });
 }
 
+function fetchHttpsBytesViaProxy(
+  target: URL,
+  proxy: URL,
+  options: FetchBytesOptions
+) {
+  return new Promise<{ ok: boolean; status: number; body: Buffer }>(
+    (resolve, reject) => {
+      const connectRequest = httpRequest({
+        protocol: proxy.protocol,
+        hostname: proxy.hostname,
+        port: proxy.port || "80",
+        method: "CONNECT",
+        path: `${target.hostname}:${target.port || 443}`,
+        headers: {
+          Host: `${target.hostname}:${target.port || 443}`,
+          ...proxyAuthorizationHeader(proxy)
+        },
+        timeout: options.timeoutMs ?? 20000
+      });
+
+      connectRequest.once("connect", (response, socket) => {
+        if (response.statusCode !== 200) {
+          socket.destroy();
+          reject(
+            new Error(
+              `RSS fetch failed for ${target.toString()}: proxy CONNECT ${response.statusCode}`
+            )
+          );
+          return;
+        }
+
+        const tlsSocket = tlsConnect({
+          socket,
+          servername: target.hostname
+        });
+
+        const path = `${target.pathname}${target.search}`;
+        const request = httpsRequest(
+          {
+            host: target.hostname,
+            servername: target.hostname,
+            method: "GET",
+            path,
+            createConnection: () => tlsSocket,
+            headers: {
+              Host: target.host,
+              ...options.headers
+            },
+            timeout: options.timeoutMs ?? 20000
+          },
+          (httpsResponse) => {
+            collectBinaryBody(httpsResponse, resolve);
+          }
+        );
+        request.on("error", (error) =>
+          reject(enrichFetchError(target.toString(), error))
+        );
+        request.on("timeout", () => {
+          request.destroy(new Error("request timed out"));
+        });
+        request.end();
+      });
+
+      connectRequest.on("error", (error) =>
+        reject(enrichFetchError(target.toString(), error))
+      );
+      connectRequest.on("timeout", () => {
+        connectRequest.destroy(new Error("proxy CONNECT timed out"));
+      });
+      connectRequest.end();
+    }
+  );
+}
+
 function collectBody(
   response: NodeJS.ReadableStream & { statusCode?: number },
   resolve: (value: { ok: boolean; status: number; body: string }) => void
@@ -155,6 +298,22 @@ function collectBody(
       ok: status >= 200 && status < 300,
       status,
       body: Buffer.concat(chunks).toString("utf8")
+    });
+  });
+}
+
+function collectBinaryBody(
+  response: NodeJS.ReadableStream & { statusCode?: number },
+  resolve: (value: { ok: boolean; status: number; body: Buffer }) => void
+) {
+  const chunks: Buffer[] = [];
+  response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+  response.on("end", () => {
+    const status = response.statusCode ?? 0;
+    resolve({
+      ok: status >= 200 && status < 300,
+      status,
+      body: Buffer.concat(chunks)
     });
   });
 }

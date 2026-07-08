@@ -18,9 +18,6 @@ export function evaluateRules(
     metadata.parsedTitle,
     metadata.resolution,
     metadata.subtitleLanguage,
-    metadata.source,
-    metadata.codec,
-    metadata.audio,
     ...(metadata.tags ?? [])
   ]
     .filter(Boolean)

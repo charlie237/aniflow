@@ -7,21 +7,26 @@ import {
   addRule,
   createSubscription,
   deleteRule,
+  deleteSubscription,
+  enqueueWorkerTask,
   getSystemSettings,
   getSubscription,
+  listRules,
+  replaceSubscriptionAllowRules,
+  resetRuntimeData,
   saveSystemSettings,
   updateSubscription
 } from "@/lib/db/repositories";
-import type { RuleType, SystemSettings } from "@/lib/db/types";
+import type { RuleType, SystemSettings, WorkerTaskType } from "@/lib/db/types";
 import {
   confirmJob,
-  pollSubscription,
   retryJob,
-  submitQueuedJobs
 } from "@/lib/worker/pipeline";
+import { kickWorkerTaskRunner } from "@/lib/worker/tasks";
 import {
   check115Connectivity,
   configure115TempDir,
+  ensureOpenListDirectory,
   type OpenList115CheckResult
 } from "@/lib/openlist/client";
 import { toBool } from "@/lib/utils";
@@ -44,12 +49,17 @@ const subscriptionSchema = z.object({
 const parsedSubscriptionSchema = z.object({
   name: z.string().min(1),
   rssUrl: z.string().url(),
-  releaseGroup: z.string().optional(),
-  resolution: z.string().optional(),
-  subtitleLanguage: z.string().optional(),
+  releaseGroup: z.string().min(1),
+  resolution: z.string().min(1),
+  subtitleLanguage: z.string().min(1),
   seasonNumber: z.coerce.number().int().min(0).max(99),
   incomingPath: z.string().optional(),
   autoDownload: z.boolean()
+});
+
+const editableSubscriptionSchema = parsedSubscriptionSchema.extend({
+  id: z.coerce.number().int().positive(),
+  enabled: z.boolean()
 });
 
 const ruleSchema = z.object({
@@ -69,14 +79,14 @@ const settingsSchema = z.object({
   openlistBaseUrl: z.string().optional().default(""),
   openlistToken: z.string().optional().default(""),
   openlist115Mode: z.enum(["115 Cloud", "115 Open"]).default("115 Cloud"),
-  openlist115TempDir: z.string().optional().default("/115/anime/_incoming"),
-  openlistIncomingPath: z.string().optional().default("/115/anime/_incoming"),
-  mediaLibraryRoot: z.string().optional().default("/115/anime"),
+  openlistIncomingPath: z.string().optional().default("/115/Anime/_incoming"),
+  mediaLibraryRoot: z.string().optional().default("/115/Anime"),
   seasonPathTemplate: z.string().optional().default("{title}/Season {season_pad}"),
   episodeFileTemplate: z
     .string()
     .optional()
     .default("{title} - S{season_pad}E{episode_pad}.{ext}"),
+  replaceExistingOnRevision: z.boolean().default(true),
   proxyEnabled: z.boolean().default(false),
   proxyUrl: z.string().optional().default("http://127.0.0.1:7890"),
   tmdbBearerToken: z.string().optional().default(""),
@@ -99,7 +109,10 @@ export async function saveSubscriptionAction(formData: FormData) {
   if (parsed.id) {
     updateSubscription(parsed.id, parsed);
   } else {
-    createSubscription(parsed);
+    const subscription = createSubscription(parsed);
+    if (subscription) {
+      enqueueAndKickWorkerTask("poll_subscription", subscription.id);
+    }
   }
 
   revalidatePath("/");
@@ -130,15 +143,55 @@ export async function createParsedSubscriptionAction(formData: FormData) {
   });
 
   if (subscription) {
-    const rules: Array<[RuleType, string | undefined]> = [
+    const rules: Array<[RuleType, string]> = [
       ["group_allow", parsed.releaseGroup],
       ["resolution_allow", parsed.resolution],
       ["language_allow", parsed.subtitleLanguage]
     ];
     for (const [type, value] of rules) {
-      if (value) addRule(subscription.id, type, value);
+      addRule(subscription.id, type, value);
     }
+    enqueueAndKickWorkerTask("poll_subscription", subscription.id);
   }
+
+  revalidatePath("/");
+  revalidatePath("/subscriptions");
+}
+
+export async function updateParsedSubscriptionAction(formData: FormData) {
+  const settings = getSystemSettings();
+  const existing = getSubscription(Number(formData.get("id")));
+  if (!existing) return;
+
+  const parsed = editableSubscriptionSchema.parse({
+    id: formData.get("id"),
+    name: formData.get("name"),
+    rssUrl: formData.get("rssUrl"),
+    releaseGroup: optionalFormString(formData.get("releaseGroup")),
+    resolution: optionalFormString(formData.get("resolution")),
+    subtitleLanguage: optionalFormString(formData.get("subtitleLanguage")),
+    seasonNumber: formData.get("seasonNumber") ?? 1,
+    incomingPath: optionalFormString(formData.get("incomingPath")),
+    enabled: toBool(formData.get("enabled")),
+    autoDownload: toBool(formData.get("autoDownload"))
+  });
+
+  updateSubscription(parsed.id, {
+    name: parsed.name,
+    rssUrl: parsed.rssUrl,
+    enabled: parsed.enabled,
+    autoDownload: parsed.autoDownload,
+    seasonNumber: parsed.seasonNumber,
+    destinationRoot: existing.destinationRoot || settings.mediaLibraryRoot,
+    incomingPath: parsed.incomingPath ?? settings.openlistIncomingPath,
+    tmdbSeriesId: existing.tmdbSeriesId
+  });
+
+  replaceSubscriptionAllowRules(parsed.id, [
+    { type: "group_allow", value: parsed.releaseGroup },
+    { type: "resolution_allow", value: parsed.resolution },
+    { type: "language_allow", value: parsed.subtitleLanguage }
+  ]);
 
   revalidatePath("/");
   revalidatePath("/subscriptions");
@@ -162,18 +215,73 @@ export async function deleteRuleAction(formData: FormData) {
   revalidatePath("/subscriptions");
 }
 
+export async function deleteSubscriptionAction(formData: FormData) {
+  const id = Number(formData.get("id"));
+  if (Number.isFinite(id)) {
+    const subscription = getSubscription(id);
+    if (subscription && toBool(formData.get("cleanupIncoming"))) {
+      const settings = getSystemSettings();
+      enqueueWorkerTask({
+        type: "cleanup_subscription_incoming",
+        payload: {
+          dedupeKey: `cleanup-subscription-incoming:${subscription.id}`,
+          subscriptionName: subscription.name,
+          incomingPath: subscription.incomingPath ?? settings.openlistIncomingPath,
+          rules: listRules(subscription.id)
+            .filter((rule) => rule.enabled)
+            .map((rule) => ({
+              type: rule.type,
+              value: rule.value,
+              enabled: rule.enabled
+            }))
+        }
+      });
+      kickWorkerTaskRunner();
+    }
+    deleteSubscription(id);
+  }
+  revalidatePath("/");
+  revalidatePath("/subscriptions");
+}
+
 export async function pollSubscriptionAction(formData: FormData) {
   const id = Number(formData.get("id"));
   if (!Number.isFinite(id)) return;
   const subscription = getSubscription(id);
   if (!subscription) return;
-  await pollSubscription(subscription.id);
+  enqueueAndKickWorkerTask("poll_subscription", subscription.id);
+  revalidatePath("/");
+  revalidatePath("/subscriptions");
+}
+
+export async function pollAllSubscriptionsAction() {
+  enqueueAndKickWorkerTask("poll_all");
+  revalidatePath("/");
+  revalidatePath("/subscriptions");
+}
+
+export async function pollSelectedSubscriptionAction(formData: FormData) {
+  const value = formData.get("subscriptionId")?.toString();
+  if (value === "all") {
+    enqueueAndKickWorkerTask("poll_all");
+  } else {
+    const id = Number(value);
+    if (!Number.isFinite(id)) return;
+    const subscription = getSubscription(id);
+    if (!subscription) return;
+    enqueueAndKickWorkerTask("poll_subscription", subscription.id);
+  }
   revalidatePath("/");
   revalidatePath("/subscriptions");
 }
 
 export async function submitQueueAction() {
-  await submitQueuedJobs();
+  enqueueAndKickWorkerTask("submit_queued");
+  revalidatePath("/");
+}
+
+export async function scanIncomingAction() {
+  enqueueAndKickWorkerTask("scan_incoming");
   revalidatePath("/");
 }
 
@@ -191,7 +299,8 @@ export async function confirmJobAction(formData: FormData) {
 
 export async function saveSettingsAction(formData: FormData) {
   const parsed = parseSettingsForm(formData);
-  saveSystemSettings(parsed);
+  const settings = saveSystemSettings(parsed);
+  await ensureConfiguredOpenListDirectories(settings).catch(() => undefined);
   revalidatePath("/");
   revalidatePath("/settings");
 }
@@ -199,11 +308,17 @@ export async function saveSettingsAction(formData: FormData) {
 export async function check115ConnectivityAction(formData: FormData) {
   const parsed = parseSettingsForm(formData);
   const settings = saveSystemSettings(parsed);
-  const tempDirCheck = await configure115TempDirCheck(settings.openlist115TempDir);
+  const directoryCheck = await ensureConfiguredOpenListDirectoriesCheck(settings);
+  const tempDirCheck = await configure115TempDirCheck(settings.openlistIncomingPath);
   const result = await check115Connectivity();
   const checks = [...result.checks];
   const apiCheckIndex = checks.findIndex((check) => check.label === "OpenList API");
-  checks.splice(apiCheckIndex >= 0 ? apiCheckIndex + 1 : 0, 0, tempDirCheck);
+  checks.splice(
+    apiCheckIndex >= 0 ? apiCheckIndex + 1 : 0,
+    0,
+    directoryCheck,
+    tempDirCheck
+  );
   const mergedResult = {
     ok: checks.every((check) => check.ok),
     checks
@@ -212,25 +327,43 @@ export async function check115ConnectivityAction(formData: FormData) {
   redirect(`/settings?check=${payload}`);
 }
 
+export async function resetRuntimeDataAction(formData: FormData) {
+  if (!toBool(formData.get("confirmRuntimeReset"))) {
+    redirect("/settings?reset=confirm");
+  }
+
+  resetRuntimeData();
+  revalidatePath("/");
+  revalidatePath("/settings");
+  redirect("/settings?reset=runtime");
+}
+
+function enqueueAndKickWorkerTask(
+  type: WorkerTaskType,
+  subscriptionId?: number | null
+) {
+  enqueueWorkerTask({ type, subscriptionId });
+  kickWorkerTaskRunner();
+}
+
 function parseSettingsForm(formData: FormData): SystemSettings {
+  const incomingPath =
+    formData.get("openlistIncomingPath")?.toString() ?? "/115/Anime/_incoming";
+  const mediaLibraryRoot =
+    formData.get("mediaLibraryRoot")?.toString() ?? "/115/Anime";
   const parsed = settingsSchema.parse({
     openlistBaseUrl: formData.get("openlistBaseUrl")?.toString() ?? "",
     openlistToken: formData.get("openlistToken")?.toString() ?? "",
     openlist115Mode: formData.get("openlist115Mode")?.toString() ?? "115 Cloud",
-    openlist115TempDir:
-      formData.get("openlist115TempDir")?.toString() ??
-      "/115/anime/_incoming",
-    openlistIncomingPath:
-      formData.get("openlistIncomingPath")?.toString() ??
-      "/115/anime/_incoming",
-    mediaLibraryRoot:
-      formData.get("mediaLibraryRoot")?.toString() ?? "/115/anime",
+    openlistIncomingPath: incomingPath,
+    mediaLibraryRoot: mediaLibraryRoot,
     seasonPathTemplate:
       formData.get("seasonPathTemplate")?.toString() ??
       "{title}/Season {season_pad}",
     episodeFileTemplate:
       formData.get("episodeFileTemplate")?.toString() ??
       "{title} - S{season_pad}E{episode_pad}.{ext}",
+    replaceExistingOnRevision: toBool(formData.get("replaceExistingOnRevision")),
     proxyEnabled: toBool(formData.get("proxyEnabled")),
     proxyUrl: formData.get("proxyUrl")?.toString() ?? "http://127.0.0.1:7890",
     tmdbBearerToken: formData.get("tmdbBearerToken")?.toString() ?? "",
@@ -246,13 +379,38 @@ async function configure115TempDirCheck(
   try {
     await configure115TempDir(tempDir);
     return {
-      label: "OpenList 115 临时目录",
+      label: "OpenList 后台同步",
       ok: true,
-      message: `${tempDir} 已写入 OpenList 的 ${settings.openlist115Mode} 临时目录`
+      message: `已把下载目录 ${tempDir} 同步到 OpenList 的 ${settings.openlist115Mode} 后台配置`
     };
   } catch (error) {
     return {
-      label: "OpenList 115 临时目录",
+      label: "OpenList 后台同步",
+      ok: false,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+async function ensureConfiguredOpenListDirectories(settings: SystemSettings) {
+  if (!settings.openlistBaseUrl || !settings.openlistToken) return;
+  await ensureOpenListDirectory(settings.mediaLibraryRoot);
+  await ensureOpenListDirectory(settings.openlistIncomingPath);
+}
+
+async function ensureConfiguredOpenListDirectoriesCheck(
+  settings: SystemSettings
+): Promise<OpenList115CheckResult["checks"][number]> {
+  try {
+    await ensureConfiguredOpenListDirectories(settings);
+    return {
+      label: "OpenList 目录创建",
+      ok: true,
+      message: `已确认 ${settings.mediaLibraryRoot} 和 ${settings.openlistIncomingPath}`
+    };
+  } catch (error) {
+    return {
+      label: "OpenList 目录创建",
       ok: false,
       message: error instanceof Error ? error.message : String(error)
     };
@@ -261,6 +419,5 @@ async function configure115TempDirCheck(
 
 function optionalFormString(value: FormDataEntryValue | null) {
   const text = value?.toString().trim();
-  if (text === "__none__") return undefined;
   return text || undefined;
 }

@@ -23,8 +23,8 @@ export function ReleaseTable({ items }: { items: DashboardData["feedItems"] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>剧集发布</CardTitle>
-        <CardDescription>字幕组、分辨率、字幕语言等只作为 TAG 和筛选条件。</CardDescription>
+        <CardTitle>候选发布</CardTitle>
+        <CardDescription>只显示命中订阅规则但尚未进入任务流水的 RSS 条目。</CardDescription>
       </CardHeader>
       <CardContent>
         <Table>
@@ -41,7 +41,7 @@ export function ReleaseTable({ items }: { items: DashboardData["feedItems"] }) {
             {items.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="h-24 text-center text-[var(--muted)]">
-                  还没有 RSS 条目。
+                  当前没有待入队的候选发布。
                 </TableCell>
               </TableRow>
             ) : (
@@ -55,9 +55,6 @@ export function ReleaseTable({ items }: { items: DashboardData["feedItems"] }) {
                         <Badge variant="violet">
                           EP {String(item.metadata.episodeNumber).padStart(2, "0")}
                         </Badge>
-                      ) : null}
-                      {item.metadata?.parseConfidence != null ? (
-                        <Badge variant="muted">{item.metadata.parseConfidence}%</Badge>
                       ) : null}
                     </div>
                   </TableCell>
