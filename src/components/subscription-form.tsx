@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import type { FilterRule, Subscription } from "@/lib/db/types";
 import type { RssPreview } from "@/lib/rss/preview";
 import { dateMs } from "@/lib/time";
+import { buildSubscriptionIncomingPath } from "@/lib/utils/path";
 
 export function SubscriptionForm({
   subscriptions,
@@ -173,7 +174,6 @@ function CreateFromPreview({
       className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] p-3"
     >
       <input type="hidden" name="rssUrl" value={preview.url} />
-      <input type="hidden" name="incomingPath" value={defaultIncomingPath ?? ""} />
       <div className="grid gap-2 md:grid-cols-2">
         <EditableField
           label="名称"
@@ -193,6 +193,16 @@ function CreateFromPreview({
           required
         />
       </div>
+      <p className="text-xs leading-5 text-[var(--muted)]">
+        下载目录默认按订阅拆分：
+        <span className="ml-1 font-medium text-[var(--text)] data-digits">
+          {buildSubscriptionIncomingPath(
+            defaultIncomingPath || "/115/Anime/_incoming",
+            name || "订阅名"
+          )}
+        </span>
+        。可在创建后编辑覆盖。
+      </p>
       <div className="grid gap-2 lg:grid-cols-[1fr_auto] lg:items-end">
         <div className="grid gap-2 md:grid-cols-3">
           <SelectField
@@ -360,7 +370,9 @@ function SubscriptionSummary({
     <div className="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
       <span>{subscription.enabled ? "启用" : "停用"}</span>
       <span>{subscription.autoDownload ? "自动离线" : "仅发现"}</span>
-      <span>{subscription.incomingPath ?? "使用默认下载目录"}</span>
+      <span className="data-digits">
+        {subscription.incomingPath?.trim() || "按订阅名自动拆分下载目录"}
+      </span>
       <RuleBadge label="字幕组" value={coreRuleValue(rules, "group_allow")} />
       <RuleBadge label="分辨率" value={coreRuleValue(rules, "resolution_allow")} />
       <RuleBadge label="字幕语言" value={coreRuleValue(rules, "language_allow")} />
@@ -416,7 +428,7 @@ function EditSubscriptionForm({
           label="下载目录"
           name="incomingPath"
           defaultValue={subscription.incomingPath ?? ""}
-          placeholder="使用后台默认下载目录"
+          placeholder="留空则按订阅名拆到全局下载根下"
         />
       </div>
       <div className="grid gap-2 md:grid-cols-3">

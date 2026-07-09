@@ -56,12 +56,14 @@ Open the **后台设置** page in the app and fill in OpenList API, 115 access
 method, proxy settings, naming templates, TMDB, and worker interval settings
 there. Runtime integration settings are stored in SQLite, not in `.env`.
 
-The download directory is the single incoming directory for this app, for
-example `/115/Anime/_incoming`. It is an OpenList remote path under a mounted
-115 storage, not a local filesystem path and not WebDAV. The app submits RSS
-torrent or magnet URLs to `/api/fs/add_offline_download` with that path, then
-uses OpenList fs APIs to scan, rename, create target directories, and move
-completed files.
+The download directory setting is the **global incoming root**, for example
+`/115/Anime/_incoming`. New subscriptions default to a **per-subscription
+subdir** under that root (`/115/Anime/_incoming/{subscription name}`) so
+offline jobs from different shows do not share one folder. It is an OpenList
+remote path under a mounted 115 storage, not a local filesystem path and not
+WebDAV. The app submits RSS torrent or magnet URLs to
+`/api/fs/add_offline_download` with the subscription path, then uses OpenList
+fs APIs to scan, rename, create target directories, and move completed files.
 
 `115 Cloud` and `115 Open` are different OpenList offline backends. Choose the
 one that matches the driver mounted at `/115`. Clicking the 115 check button

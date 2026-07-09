@@ -57,7 +57,8 @@ import {
   getRemoteBaseName,
   getRemoteDirName,
   isMediaFile,
-  joinRemotePath
+  joinRemotePath,
+  resolveSubscriptionIncomingPath
 } from "@/lib/utils/path";
 import {
   MIN_TRACKED_JOB_MATCH_SCORE,
@@ -221,8 +222,7 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
       ) {
         updateJobStatus(existingJob.id, "queued", {
           errorMessage: null,
-          targetPath:
-            subscription.incomingPath ?? getSystemSettings().openlistIncomingPath
+          targetPath: incomingPathForSubscription(subscription)
         });
         result.queued += 1;
         continue;
@@ -270,7 +270,7 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
       feedItemId: feedItem.id,
       status: "queued",
       sourceUrl: candidate.downloadUrl,
-      targetPath: subscription.incomingPath ?? getSystemSettings().openlistIncomingPath
+      targetPath: incomingPathForSubscription(subscription)
     });
     result.queued += 1;
   }
@@ -429,7 +429,7 @@ export async function submitJob(job: DownloadJob) {
     }
   }
 
-  const targetPath = subscription.incomingPath ?? getSystemSettings().openlistIncomingPath;
+  const targetPath = incomingPathForSubscription(subscription);
 
   // Atomic claim prevents web + worker double-submit of the same queued job.
   if (job.status === "queued" && !claimQueuedJob(job.id)) {
@@ -493,7 +493,7 @@ export async function scanAndRenameIncoming() {
   const subscriptions = listEnabledSubscriptions();
   const incomingPaths = uniquePaths([
     settings.openlistIncomingPath,
-    ...subscriptions.map((subscription) => subscription.incomingPath)
+    ...subscriptions.map((subscription) => incomingPathForSubscription(subscription))
   ]);
   const seen = new Set<string>();
 
@@ -1006,7 +1006,12 @@ function uniquePaths(paths: Array<string | null | undefined>) {
 }
 
 export function incomingPathForSubscription(subscription: Subscription) {
-  return joinRemotePath(subscription.incomingPath ?? getSystemSettings().openlistIncomingPath);
+  const settings = getSystemSettings();
+  return resolveSubscriptionIncomingPath({
+    incomingRoot: settings.openlistIncomingPath,
+    subscriptionName: subscription.name,
+    incomingPath: subscription.incomingPath
+  });
 }
 
 /** Prefer per-subscription library root when set; otherwise global mediaLibraryRoot. */

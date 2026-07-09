@@ -53,11 +53,11 @@ export function SettingsForm({
             />
             <ModeSelect defaultValue={settings.openlist115Mode} />
             <Field
-              label="下载目录"
+              label="下载目录（全局根）"
               name="openlistIncomingPath"
               defaultValue={settings.openlistIncomingPath}
               placeholder="/115/Anime/_incoming"
-              help="RSS 离线任务下载到这里，Worker 从这里扫描、重命名，然后移动到媒体库根路径。检测时会自动同步到 OpenList 后台配置。"
+              help="全局下载根路径。新建订阅默认会再拆一层子目录：{根}/{订阅名}，避免多订阅共用同一目录时文件串台。Worker 仍会扫描根目录与各订阅子目录。检测时会把根路径同步到 OpenList 后台配置。"
             />
             <div className="flex flex-wrap items-center gap-2 md:col-span-2">
               <Button

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { parseReleaseTitle } from "@/lib/rss/title-parser";
-import { buildEpisodePath } from "@/lib/utils/path";
+import {
+  buildEpisodePath,
+  buildSubscriptionIncomingPath,
+  resolveSubscriptionIncomingPath
+} from "@/lib/utils/path";
 
 describe("parseReleaseTitle", () => {
   it("extracts group, episode and release tags from Mikan-style titles", () => {
@@ -281,5 +285,33 @@ describe("buildEpisodePath", () => {
     });
 
     expect(path).toBe("/Media/Show Name/S02/Show Name.02x12.mkv");
+  });
+});
+
+describe("subscription incoming path", () => {
+  it("isolates each subscription under the global incoming root", () => {
+    expect(
+      buildSubscriptionIncomingPath("/115/Anime/_incoming", "葬送的芙莉莲")
+    ).toBe("/115/Anime/_incoming/葬送的芙莉莲");
+    expect(
+      buildSubscriptionIncomingPath("/115/Anime/_incoming", 'Show: "Name"/A')
+    ).toBe("/115/Anime/_incoming/Show Name A");
+  });
+
+  it("prefers an explicit path when set", () => {
+    expect(
+      resolveSubscriptionIncomingPath({
+        incomingRoot: "/115/Anime/_incoming",
+        subscriptionName: "Show",
+        incomingPath: "/115/Anime/_incoming/custom"
+      })
+    ).toBe("/115/Anime/_incoming/custom");
+    expect(
+      resolveSubscriptionIncomingPath({
+        incomingRoot: "/115/Anime/_incoming",
+        subscriptionName: "Show",
+        incomingPath: null
+      })
+    ).toBe("/115/Anime/_incoming/Show");
   });
 });

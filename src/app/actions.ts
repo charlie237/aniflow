@@ -34,6 +34,11 @@ import {
   type OpenList115CheckResult
 } from "@/lib/openlist/client";
 import { toBool } from "@/lib/utils";
+import {
+  buildSubscriptionIncomingPath,
+  joinRemotePath,
+  resolveSubscriptionIncomingPath
+} from "@/lib/utils/path";
 
 const subscriptionSchema = z.object({
   id: z.coerce.number().optional(),
@@ -112,6 +117,7 @@ const manualEpisodeSchema = z.object({
 });
 
 export async function saveSubscriptionAction(formData: FormData) {
+  const settings = getSystemSettings();
   const parsed = subscriptionSchema.parse({
     id: formData.get("id") || undefined,
     name: formData.get("name"),
@@ -124,10 +130,19 @@ export async function saveSubscriptionAction(formData: FormData) {
     tmdbSeriesId: formData.get("tmdbSeriesId")?.toString() ?? ""
   });
 
+  const existing = parsed.id ? getSubscription(parsed.id) : null;
+  const incomingPath = resolveSubscriptionIncomingPathInput({
+    name: parsed.name,
+    incomingPath: parsed.incomingPath,
+    incomingRoot: settings.openlistIncomingPath,
+    previousName: existing?.name,
+    previousIncomingPath: existing?.incomingPath
+  });
+
   if (parsed.id) {
-    updateSubscription(parsed.id, parsed);
+    updateSubscription(parsed.id, { ...parsed, incomingPath });
   } else {
-    const subscription = createSubscription(parsed);
+    const subscription = createSubscription({ ...parsed, incomingPath });
     if (subscription) {
       enqueueAndKickWorkerTask("poll_subscription", subscription.id);
     }
@@ -157,7 +172,11 @@ export async function createParsedSubscriptionAction(formData: FormData) {
     autoDownload: parsed.autoDownload,
     seasonNumber: parsed.seasonNumber,
     destinationRoot: settings.mediaLibraryRoot,
-    incomingPath: parsed.incomingPath ?? settings.openlistIncomingPath
+    incomingPath: resolveSubscriptionIncomingPathInput({
+      name: parsed.name,
+      incomingPath: parsed.incomingPath,
+      incomingRoot: settings.openlistIncomingPath
+    })
   });
 
   if (subscription) {
@@ -201,7 +220,13 @@ export async function updateParsedSubscriptionAction(formData: FormData) {
     autoDownload: parsed.autoDownload,
     seasonNumber: parsed.seasonNumber,
     destinationRoot: existing.destinationRoot || settings.mediaLibraryRoot,
-    incomingPath: parsed.incomingPath ?? settings.openlistIncomingPath,
+    incomingPath: resolveSubscriptionIncomingPathInput({
+      name: parsed.name,
+      incomingPath: parsed.incomingPath,
+      incomingRoot: settings.openlistIncomingPath,
+      previousName: existing.name,
+      previousIncomingPath: existing.incomingPath
+    }),
     tmdbSeriesId: existing.tmdbSeriesId
   });
 
@@ -244,7 +269,11 @@ export async function deleteSubscriptionAction(formData: FormData) {
         payload: {
           dedupeKey: `cleanup-subscription-incoming:${subscription.id}`,
           subscriptionName: subscription.name,
-          incomingPath: subscription.incomingPath ?? settings.openlistIncomingPath,
+          incomingPath: resolveSubscriptionIncomingPath({
+            incomingRoot: settings.openlistIncomingPath,
+            subscriptionName: subscription.name,
+            incomingPath: subscription.incomingPath
+          }),
           rules: listRules(subscription.id)
             .filter((rule) => rule.enabled)
             .map((rule) => ({
@@ -392,7 +421,11 @@ export async function manualSupplementEpisodeAction(formData: FormData) {
     feedItemId: feedItem.id,
     status: "queued",
     sourceUrl: parsed.sourceUrl,
-    targetPath: subscription.incomingPath ?? settings.openlistIncomingPath,
+    targetPath: resolveSubscriptionIncomingPath({
+      incomingRoot: settings.openlistIncomingPath,
+      subscriptionName: subscription.name,
+      incomingPath: subscription.incomingPath
+    }),
     errorMessage: null
   });
   enqueueAndKickWorkerTask("submit_queued");
@@ -561,6 +594,51 @@ function manualEpisodeTitle({
     .map((value) => `[${value}]`)
     .join("");
   return `${prefix}${subscriptionName} - ${episodeText}${revisionSuffix}${tags}`;
+}
+
+/**
+ * Prefer an explicit path; otherwise isolate under the global incoming root
+ * by subscription name. If the form still submits only the global root (legacy
+ * create flow), also split by name. When renaming and the path was the old
+ * auto path, follow the new name.
+ */
+function resolveSubscriptionIncomingPathInput(params: {
+  name: string;
+  incomingPath?: string | null;
+  incomingRoot: string;
+  previousName?: string;
+  previousIncomingPath?: string | null;
+}) {
+  const root = joinRemotePath(params.incomingRoot);
+  const explicit = params.incomingPath?.trim();
+  const autoForName = buildSubscriptionIncomingPath(root, params.name);
+  const previousAuto = params.previousName
+    ? buildSubscriptionIncomingPath(root, params.previousName)
+    : null;
+  const previousStored = params.previousIncomingPath?.trim()
+    ? joinRemotePath(params.previousIncomingPath)
+    : null;
+
+  if (!explicit) return autoForName;
+
+  const explicitPath = joinRemotePath(explicit);
+
+  // Legacy create sent the shared root as the default path.
+  if (explicitPath === root) return autoForName;
+
+  // Renamed subscription still pointing at the previous auto path → follow name.
+  if (
+    previousAuto &&
+    previousStored &&
+    explicitPath === previousAuto &&
+    previousStored === previousAuto &&
+    params.previousName &&
+    params.previousName !== params.name
+  ) {
+    return autoForName;
+  }
+
+  return explicitPath;
 }
 
 function optionalFormString(value: FormDataEntryValue | null) {
