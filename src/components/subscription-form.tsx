@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { FilterRule, Subscription } from "@/lib/db/types";
 import type { RssPreview } from "@/lib/rss/preview";
+import { dateMs } from "@/lib/time";
 
 export function SubscriptionForm({
   subscriptions,
@@ -597,9 +598,9 @@ function FilterPreview({
         </Badge>
       </div>
       <div className="grid gap-1.5">
-        {visibleRows.slice(0, 12).map((row) => (
+        {visibleRows.slice(0, 12).map((row, index) => (
           <div
-            key={row.item.guid}
+            key={`${index}:${row.item.guid}:${row.item.downloadUrl ?? row.item.link ?? ""}`}
             className="grid gap-1 rounded-[6px] border border-[var(--line)] px-2 py-1.5 text-xs"
           >
             <div className="truncate font-medium">{row.item.title}</div>
@@ -627,7 +628,10 @@ function FilterPreview({
               />
               <FilterTag
                 label={row.item.metadata.subtitleLanguage}
-                active={equalsLoose(row.item.metadata.subtitleLanguage, filters.subtitleLanguage)}
+                active={equalsLoose(
+                  row.item.metadata.subtitleLanguage,
+                  filters.subtitleLanguage
+                )}
                 onClick={(value) => onFilterPick("subtitleLanguage", value)}
               />
             </div>
@@ -765,12 +769,6 @@ function comparePreviewRevision(
 
 function normalizedFacetValue(value: string | null | undefined) {
   return (value ?? "").trim().toLowerCase();
-}
-
-function dateMs(value?: string | null) {
-  if (!value) return 0;
-  const time = new Date(value).getTime();
-  return Number.isNaN(time) ? 0 : time;
 }
 
 function equalsLoose(left: string | null | undefined, right: string) {

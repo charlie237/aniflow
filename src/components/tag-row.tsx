@@ -16,8 +16,8 @@ export function TagRow({ metadata }: { metadata: ReleaseMetadata | null }) {
 
   return (
     <div className="flex flex-wrap gap-1.5">
-      {tags.map((tag) => (
-        <Badge key={tag} variant="signal">
+      {tags.map((tag, index) => (
+        <Badge key={`${index}:${tag}`} variant="signal">
           {tag}
         </Badge>
       ))}

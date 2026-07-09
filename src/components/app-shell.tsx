@@ -1,8 +1,13 @@
 import Link from "next/link";
-import { RadioTower } from "lucide-react";
+import { LogOut, RadioTower } from "lucide-react";
 import type { ReactNode } from "react";
+import { logoutAction } from "@/app/auth-actions";
+import { isAuthEnabled } from "@/lib/auth";
+import { Button } from "@/components/ui/button";
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const authEnabled = isAuthEnabled();
+
   return (
     <main className="min-h-screen">
       <header className="border-b border-[var(--line)] bg-white/82 backdrop-blur">
@@ -13,10 +18,18 @@ export function AppShell({ children }: { children: ReactNode }) {
             </span>
             Aniflow
           </Link>
-          <nav className="flex flex-wrap gap-1 text-sm">
+          <nav className="flex flex-wrap items-center gap-1 text-sm">
             <NavLink href="/">运行总览</NavLink>
             <NavLink href="/subscriptions">订阅</NavLink>
             <NavLink href="/settings">后台设置</NavLink>
+            {authEnabled ? (
+              <form action={logoutAction}>
+                <Button type="submit" variant="ghost" className="h-9 gap-1.5 px-3 text-[var(--muted)]">
+                  <LogOut className="size-3.5" />
+                  退出
+                </Button>
+              </form>
+            ) : null}
           </nav>
         </div>
       </header>

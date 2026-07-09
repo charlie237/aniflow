@@ -139,9 +139,9 @@ export function SettingsForm({
                 defaultChecked={settings.replaceExistingOnRevision}
               />
               <span>
-                <span className="block font-medium">新版覆盖</span>
+                <span className="block font-medium">同路径覆盖</span>
                 <span className="mt-1 block text-xs leading-5 text-[var(--muted)]">
-                  当 RSS 出现 v2/v3 修正版时，整理到同名最终路径会覆盖旧文件；普通 v1 不会覆盖已有文件。
+                  整理到媒体库时，若最终路径已存在同名文件（v2/v3 修正版、重下、或不同字幕组落到同一模板路径），则覆盖旧文件。
                 </span>
               </span>
             </label>
@@ -175,7 +175,7 @@ export function SettingsForm({
           <CardHeader>
             <CardTitle>杂项</CardTitle>
             <CardDescription>
-              TMDB 只做展示增强；Worker 间隔影响 RSS 轮询频率。
+              TMDB 只做展示增强；Worker 间隔与下载超时影响后台任务节奏。
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-2">
@@ -191,6 +191,50 @@ export function SettingsForm({
               defaultValue={String(settings.workerIntervalSeconds)}
               type="number"
               min={30}
+              help="RSS 轮询与任务调度间隔，最短 30 秒。修改后下一轮生效。"
+            />
+            <Field
+              label="下载超时（分钟）"
+              name="downloadTimeoutMinutes"
+              defaultValue={String(settings.downloadTimeoutMinutes)}
+              type="number"
+              min={1}
+              max={1440}
+              help="任务处于「下载中」超过该时间且未整理完成时，标记为失败。默认 30 分钟。"
+            />
+            <label className="flex items-start gap-2 text-sm md:col-span-2">
+              <input
+                className="mt-1"
+                type="checkbox"
+                name="downloadAutoRetryEnabled"
+                value="1"
+                defaultChecked={settings.downloadAutoRetryEnabled}
+              />
+              <span>
+                <span className="block font-medium">下载失败自动重试</span>
+                <span className="mt-1 block text-xs leading-5 text-[var(--muted)]">
+                  提交失败、115/OpenList 任务失败或下载超时后，冷却一段时间自动重新入队并清理旧
+                  task id。达到最大尝试次数后停止，仍可手动点重试。
+                </span>
+              </span>
+            </label>
+            <Field
+              label="下载最大尝试次数"
+              name="downloadAutoRetryMaxAttempts"
+              defaultValue={String(settings.downloadAutoRetryMaxAttempts)}
+              type="number"
+              min={1}
+              max={20}
+              help="含首次提交。例如 3 表示最多提交 3 次离线下载。"
+            />
+            <Field
+              label="下载重试冷却（分钟）"
+              name="downloadAutoRetryCooldownMinutes"
+              defaultValue={String(settings.downloadAutoRetryCooldownMinutes)}
+              type="number"
+              min={1}
+              max={1440}
+              help="失败后至少等待这么久才会自动重新入队。默认 10 分钟。"
             />
             <div className="md:col-span-2">
               <Button variant="signal" type="submit">

@@ -46,4 +46,30 @@ describe("evaluateRules", () => {
     expect(decision.allowed).toBe(false);
     expect(decision.reasons[0]).toContain("AVC");
   });
+
+  it("matches resolution case-insensitively only (no 1920x1080 alias)", () => {
+    expect(
+      evaluateRules("Test", metadata, [rule("resolution_allow", "1080P")]).allowed
+    ).toBe(true);
+
+    expect(
+      evaluateRules("Test", { ...metadata, resolution: "1920x1080" }, [
+        rule("resolution_allow", "1080p")
+      ]).allowed
+    ).toBe(false);
+  });
+
+  it("matches language by exact label only", () => {
+    expect(
+      evaluateRules("Test", { ...metadata, subtitleLanguage: "简体内嵌" }, [
+        rule("language_allow", "简体")
+      ]).allowed
+    ).toBe(false);
+
+    expect(
+      evaluateRules("Test", { ...metadata, subtitleLanguage: "简体内嵌" }, [
+        rule("language_allow", "简体内嵌")
+      ]).allowed
+    ).toBe(true);
+  });
 });

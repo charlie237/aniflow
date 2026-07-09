@@ -1,6 +1,12 @@
-import type { DownloadJob, FilterRule, Subscription } from "@/lib/db/types";
+import type {
+  DownloadJob,
+  FilterRule,
+  ReleaseMetadata,
+  Subscription
+} from "@/lib/db/types";
 import {
   createOrUpdateJob,
+  failStaleDownloadingJobs,
   findMetadataBySubscription,
   getFeedItem,
   getJob,
@@ -13,6 +19,7 @@ import {
   listJobsByStatus,
   listRules,
   markJobAttempt,
+  requeueFailedDownloadJobs,
   touchSubscriptionPolled,
   updateJobStatus,
   upsertEpisodeFile,
@@ -22,12 +29,17 @@ import { fetchText } from "@/lib/net/fetch";
 import {
   add115OfflineDownload,
   ensureOpenListDirectory,
+  isOfflineTaskFailed,
   isOpenListNotFoundError,
+  listOfflineDownloadDone,
+  listOfflineDownloadTransferUndone,
+  listOfflineDownloadUndone,
   listOpenListFiles,
   moveOpenListFiles,
   renameOpenListFile,
   removeOpenListFiles,
-  type OpenListFileEntry
+  type OpenListFileEntry,
+  type OpenListTask
 } from "@/lib/openlist/client";
 import { evaluateRules } from "@/lib/rules/engine";
 import { parseRss } from "@/lib/rss/parser";
@@ -41,8 +53,15 @@ import {
   isMediaFile,
   joinRemotePath
 } from "@/lib/utils/path";
+import {
+  pickBestIncomingSubscriptionMatch,
+  scoreIncomingSubscriptionMatch
+} from "@/lib/worker/match";
 
 export interface PipelineResult {
+  /** Total items in the RSS feed this poll. */
+  fetched: number;
+  /** Items that matched rules and were written to SQLite. */
   discovered: number;
   queued: number;
   skipped: number;
@@ -57,6 +76,7 @@ export interface DeletedSubscriptionIncomingCleanup {
 
 export async function pollAllSubscriptions() {
   const totals: PipelineResult = {
+    fetched: 0,
     discovered: 0,
     queued: 0,
     skipped: 0,
@@ -65,6 +85,7 @@ export async function pollAllSubscriptions() {
 
   for (const subscription of listEnabledSubscriptions()) {
     const result = await pollSubscription(subscription.id);
+    totals.fetched += result.fetched;
     totals.discovered += result.discovered;
     totals.queued += result.queued;
     totals.skipped += result.skipped;
@@ -89,13 +110,19 @@ export async function refreshSubscriptionFeedCache(subscriptionId: number) {
   }
 
   const items = parseRss(response.body);
+  const rules = listRules(subscription.id);
+  let stored = 0;
   for (const item of items) {
+    // Only cache rule-matching releases — same policy as pollSubscription.
+    if (!evaluateRules(item.title, item.metadata, rules).allowed) continue;
     upsertFeedItem(subscription, item);
+    stored += 1;
   }
   touchSubscriptionPolled(subscription.id);
 
   return {
-    discovered: items.length
+    fetched: items.length,
+    discovered: stored
   };
 }
 
@@ -104,6 +131,7 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
   if (!subscription) throw new Error(`Subscription ${subscriptionId} not found`);
 
   const result: PipelineResult = {
+    fetched: 0,
     discovered: 0,
     queued: 0,
     skipped: 0,
@@ -120,38 +148,41 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
     throw new Error(`RSS fetch failed (${response.status}) for ${subscription.name}`);
   }
 
-  const xml = response.body;
-  const items = parseRss(xml);
+  const items = parseRss(response.body);
+  result.fetched = items.length;
   const rules = listRules(subscription.id);
-  const feedItems = items.map((item) => {
+
+  for (const item of items) {
+    // Gate on rules before any DB write — only matching releases are stored.
+    const decision = evaluateRules(item.title, item.metadata, rules);
+    if (!decision.allowed) {
+      result.skipped += 1;
+      continue;
+    }
+
     const feedItem = upsertFeedItem(subscription, item);
     result.discovered += 1;
-    return { item, feedItem };
-  });
+    const metadata: ReleaseMetadata | Omit<ReleaseMetadata, "id" | "feedItemId"> =
+      getMetadataForFeedItem(feedItem.id) ?? {
+        ...item.metadata,
+        releaseRevision: item.metadata.releaseRevision ?? 1
+      };
 
-  for (const { item, feedItem } of feedItems) {
-    const metadata = getMetadataForFeedItem(feedItem.id);
-
-    if (metadata) {
-      const decision = evaluateRules(item.title, metadata, rules);
-      if (!decision.allowed) {
-        result.skipped += 1;
-        continue;
-      }
-
-      const preferredFeedItemId = getPreferredFeedItemIdForRelease(
-        subscription.id,
-        metadata
-      );
-      if (preferredFeedItemId != null && preferredFeedItemId !== feedItem.id) {
-        markSupersededJob(feedItem.id);
-        result.skipped += 1;
-        continue;
-      }
+    const preferredFeedItemId = getPreferredFeedItemIdForRelease(
+      subscription.id,
+      metadata as ReleaseMetadata
+    );
+    if (preferredFeedItemId != null && preferredFeedItemId !== feedItem.id) {
+      markSupersededJob(feedItem.id);
+      result.skipped += 1;
+      continue;
     }
 
     const existingJob = getJobForItem(feedItem.id);
-    if (existingJob) continue;
+    if (existingJob) {
+      result.skipped += 1;
+      continue;
+    }
 
     if (!item.downloadUrl) {
       createOrUpdateJob({
@@ -164,7 +195,7 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
       continue;
     }
 
-    if (!metadata || metadata.needsReview) {
+    if (!metadata || metadata.needsReview || metadata.episodeNumber == null) {
       createOrUpdateJob({
         subscriptionId: subscription.id,
         feedItemId: feedItem.id,
@@ -199,29 +230,113 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
 
   touchSubscriptionPolled(subscription.id);
   await submitQueuedJobs();
+  await reconcileDownloadingJobs();
   await scanAndRenameIncoming();
   return result;
 }
 
 export async function submitQueuedJobs() {
+  requeueFailedDownloadJobs();
   const jobs = listJobsByStatus(["queued"]);
   for (const job of jobs) {
     await submitJob(job);
   }
 }
 
+/**
+ * Reconcile jobs stuck in "downloading":
+ * - mark failed when OpenList reports task error
+ * - mark failed when job is older than settings.downloadTimeoutMinutes with no completion
+ *
+ * Successful completion still happens via scanAndRenameIncoming when the media file appears.
+ */
+export async function reconcileDownloadingJobs() {
+  const settings = getSystemSettings();
+  const staleSeconds = Math.max(1, settings.downloadTimeoutMinutes) * 60;
+  const downloading = listJobsByStatus(["downloading"]);
+  if (downloading.length === 0) {
+    failStaleDownloadingJobs(staleSeconds);
+    return { checked: 0, failed: 0 };
+  }
+
+  let failed = 0;
+
+  if (settings.openlistBaseUrl && settings.openlistToken) {
+    const [undone, done, transferring] = await Promise.all([
+      listOfflineDownloadUndone(),
+      listOfflineDownloadDone(),
+      listOfflineDownloadTransferUndone()
+    ]);
+    const byId = new Map<string, OpenListTask>();
+    for (const task of [...undone, ...done, ...transferring]) {
+      if (task.id) byId.set(String(task.id), task);
+    }
+
+    const activeIds = new Set([
+      ...undone.map((task) => String(task.id)),
+      ...transferring.map((task) => String(task.id))
+    ]);
+
+    for (const job of downloading) {
+      if (!job.openlistTaskId) continue;
+      const taskId = String(job.openlistTaskId);
+      const task = byId.get(taskId);
+      if (task && isOfflineTaskFailed(task)) {
+        updateJobStatus(job.id, "failed", {
+          clearOpenlistTaskId: true,
+          errorMessage: task.error?.trim() || `OpenList offline task failed (${task.status || task.state})`
+        });
+        failed += 1;
+        continue;
+      }
+      if (activeIds.has(taskId)) {
+        // Still running (download or transfer) — leave as downloading.
+        continue;
+      }
+      // Task not in active lists: either succeeded and was purged (115), or vanished.
+      // Do not mark completed here; wait for file scan or stale timeout.
+    }
+  }
+
+  failed += failStaleDownloadingJobs(staleSeconds);
+  return { checked: downloading.length, failed };
+}
+
+/** Re-submit offline download (clears OpenList task id). */
 export async function retryJob(jobId: number) {
   const job = getJob(jobId);
   if (!job) throw new Error(`Job ${jobId} not found`);
-  updateJobStatus(job.id, "queued", { errorMessage: null });
-  await submitJob({ ...job, status: "queued" });
+  console.log(`[pipeline] redownload job#${job.id}`);
+  updateJobStatus(job.id, "queued", {
+    errorMessage: null,
+    clearOpenlistTaskId: true
+  });
+  await submitJob({ ...job, status: "queued", openlistTaskId: null });
+}
+
+/**
+ * Only re-scan / re-organize incoming files — do not submit a new offline download.
+ * Use when the file may already be in _incoming but rename/move failed.
+ */
+export async function reorganizeJob(jobId: number) {
+  const job = getJob(jobId);
+  if (!job) throw new Error(`Job ${jobId} not found`);
+  console.log(`[pipeline] reorganize job#${job.id}`);
+  updateJobStatus(job.id, "ready_to_rename", {
+    errorMessage: null
+  });
+  await scanAndRenameIncoming();
 }
 
 export async function confirmJob(jobId: number) {
   const job = getJob(jobId);
   if (!job) throw new Error(`Job ${jobId} not found`);
-  updateJobStatus(job.id, "queued", { errorMessage: null });
-  await submitJob({ ...job, status: "queued" });
+  console.log(`[pipeline] confirm job#${job.id}`);
+  updateJobStatus(job.id, "queued", {
+    errorMessage: null,
+    clearOpenlistTaskId: true
+  });
+  await submitJob({ ...job, status: "queued", openlistTaskId: null });
 }
 
 export async function submitJob(job: DownloadJob) {
@@ -277,13 +392,37 @@ export async function submitJob(job: DownloadJob) {
       targetPath,
       errorMessage: null
     });
+    console.log(
+      `[pipeline] job#${job.id} submitted offline task=${tasks[0]?.id ?? "n/a"}`
+    );
   } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // 115/OpenList often reject duplicate offline URLs — treat as "already downloading".
+    if (isAlreadyInOfflineListError(message)) {
+      markJobAttempt(job.id, {
+        status: "downloading",
+        targetPath,
+        errorMessage:
+          "URL already in OpenList offline list; waiting for file in download directory"
+      });
+      console.log(
+        `[pipeline] job#${job.id} already in offline list — waiting for file`
+      );
+      return;
+    }
     markJobAttempt(job.id, {
       status: "failed",
       targetPath,
-      errorMessage: error instanceof Error ? error.message : String(error)
+      errorMessage: message
     });
+    console.error(`[pipeline] job#${job.id} submit failed: ${message}`);
   }
+}
+
+function isAlreadyInOfflineListError(message: string) {
+  return /already|exist|duplicate|离线|已存在|in the offline|task url|重复/i.test(
+    message
+  );
 }
 
 export async function scanAndRenameIncoming() {
@@ -366,7 +505,7 @@ async function renameIncomingFile(
   const { subscription } = match;
   const settings = getSystemSettings();
   const finalPath = buildEpisodePath({
-    destinationRoot: settings.mediaLibraryRoot || subscription.destinationRoot,
+    destinationRoot: libraryRootForSubscription(subscription),
     subscriptionName: subscription.name,
     seasonNumber: subscription.seasonNumber,
     episodeNumber: parsed.episodeNumber,
@@ -381,8 +520,9 @@ async function renameIncomingFile(
   let currentPath = file.path;
   const feedItemId = match.job?.feedItemId ?? null;
   const cleanupRoot = match.job?.targetPath ?? incomingPathForSubscription(subscription);
-  const shouldReplaceExisting =
-    settings.replaceExistingOnRevision && parsed.releaseRevision > 1;
+  // When enabled, replace any existing library file at the same final path
+  // (same episode from a newer revision, different group, or re-download).
+  const shouldReplaceExisting = settings.replaceExistingOnRevision;
 
   try {
     if (match.job) {
@@ -592,27 +732,16 @@ function findSubscriptionByFilenameRules(
   filename: string,
   parsed: ReturnType<typeof parseReleaseTitle>
 ) {
-  const eligibleSubscriptions = subscriptions.filter((subscription) => {
-    const rules = listRules(subscription.id);
-    if (rules.filter((rule) => rule.enabled).length === 0) return true;
-    return evaluateRules(filename, parsed, rules).allowed;
-  });
-  const normalizedFilename = filename.toLowerCase();
-  const parsedTitle = parsed.parsedTitle?.toLowerCase();
-  return (
-    eligibleSubscriptions.find((subscription) =>
-      normalizedFilename.includes(subscription.name.toLowerCase())
-    ) ??
-    eligibleSubscriptions.find(
-      (subscription) =>
-        parsedTitle && subscription.name.toLowerCase().includes(parsedTitle)
-    ) ??
-    eligibleSubscriptions.find((subscription) =>
-      findMetadataBySubscription(subscription.id).some(
-        (metadata) => metadata.episodeNumber === parsed.episodeNumber
-      )
-    )
+  const candidates = subscriptions.map((subscription) =>
+    scoreIncomingSubscriptionMatch({
+      subscription,
+      filename,
+      parsed,
+      rules: listRules(subscription.id),
+      knownMetadata: findMetadataBySubscription(subscription.id)
+    })
   );
+  return pickBestIncomingSubscriptionMatch(candidates);
 }
 
 function isPathWithin(path: string, root: string) {
@@ -675,4 +804,11 @@ function uniquePaths(paths: Array<string | null | undefined>) {
 
 export function incomingPathForSubscription(subscription: Subscription) {
   return joinRemotePath(subscription.incomingPath ?? getSystemSettings().openlistIncomingPath);
+}
+
+/** Prefer per-subscription library root when set; otherwise global mediaLibraryRoot. */
+export function libraryRootForSubscription(subscription: Subscription) {
+  const settings = getSystemSettings();
+  const root = subscription.destinationRoot?.trim() || settings.mediaLibraryRoot;
+  return joinRemotePath(root);
 }

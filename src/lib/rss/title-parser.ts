@@ -23,8 +23,9 @@ const SOURCE_RE =
   /(?:^|[^A-Za-z0-9])(web-?dl|webrip|b-?global|baha|cr|crunchyroll|netflix|nf|bilibili|at-?x|abema|amzn|u-?next|tv|bd|bdrip|bluray)(?=$|[^A-Za-z0-9])/i;
 const AUDIO_RE =
   /(?:^|[^A-Za-z0-9])(flac|aac|opus|mp3|ddp|e-?ac-?3|ac3|2\.0|5\.1|7\.1)(?=$|[^A-Za-z0-9])/i;
+// Short Latin codes need boundaries so "tc" in CATCHPLAY is not a subtitle hit.
 const SUBTITLE_RE =
-  /(chs[+&/_-]?(?:cht|tc|jpn|jp)?|sc[+&/_-]?tc|cht[+&/_-]?(?:jpn|jp)?|ch[st]|big5|gb|sc|tc|jpsc|jpn|jp|eng|multi|简繁(?:内封字幕|外挂字幕|内封|外挂|字幕)?|简体(?:中文|内嵌|内封|外挂|字幕)?|繁体(?:中文|内嵌|内封|外挂|字幕)?|繁體(?:中文|內嵌|內封|外掛|字幕)?|简中|繁中|中文字幕|简日(?:双语|雙語)?|繁日(?:双语|雙語)?|中日(?:双语|雙語)?|日简(?:双语|雙語)?|日繁(?:双语|雙語)?)/i;
+  /(?:^|[^A-Za-z0-9])(chs[+&/_-]?(?:cht|tc|jpn|jp)?|sc[+&/_-]?tc|cht[+&/_-]?(?:jpn|jp)?|ch[st]|big5|gb|jpsc|jpn|jp|eng|multi)(?=$|[^A-Za-z0-9])|(简繁(?:日内封|内封|外挂|内嵌)?(?:字幕)?|简日(?:双语|雙語|内嵌|内封|外挂|字幕)?|繁日(?:双语|雙語|内嵌|内封|外挂|字幕)?|中日(?:双语|雙語)?|日简(?:双语|雙語)?|日繁(?:双语|雙語)?|简体(?:中文|内嵌|内封|外挂|字幕)?|繁体(?:中文|内嵌|内封|外挂|字幕)?|繁體(?:中文|內嵌|內封|外掛|字幕)?|简中|繁中|中文字幕|简繁日内封字幕|简繁内封字幕)/i;
 const SEASON_PATTERNS = [
   /\bS(?<season>\d{1,2})E\d{1,3}(?:\b|v\d)/i,
   /\bS(?<season>\d{1,2})\s*[-_. ]+\s*\d{1,3}\b/i,
@@ -331,7 +332,11 @@ function findMatch(
 function inferSubtitleLanguage(title: string, bracketTags: string[]) {
   const bracketValue = bracketTags.find((tag) => looksLikeSubtitleTag(tag));
   if (bracketValue) return bracketValue.trim();
-  return findMatch(title, SUBTITLE_RE, keepOriginal);
+  // findMatch uses group 1; Chinese branch may be group 0-only — use first capture or full match
+  const match = title.match(SUBTITLE_RE);
+  if (!match) return null;
+  const value = (match[1] ?? match[0]).trim();
+  return value || null;
 }
 
 function keepOriginal(value: string) {
@@ -348,18 +353,46 @@ function extractLeadingWrappedValue(title: string) {
 }
 
 function looksLikeSubtitleTag(value: string) {
-  return SUBTITLE_RE.test(value);
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 48) return false;
+  // "CATCHPLAY WEB-DL 1080p AVC AAC" must never count as a subtitle tag
+  // (previously "tc" inside CATCHPLAY made SUBTITLE_RE.test true for the whole tag).
+  if (looksLikeTechnicalBundle(trimmed)) return false;
+  // "桜都字幕组" is a release group, not a language label.
+  if (/字幕组|字幕組|字幕組/.test(trimmed)) return false;
+  if (
+    /^(chs|cht|sc|tc|jpsc|jpn|jp|eng|gb|big5|multi)([+&/_-][A-Za-z0-9]+)*$/i.test(
+      trimmed
+    )
+  ) {
+    return true;
+  }
+  // Chinese subtitle phrases: language words + optional 字幕/内封/…
+  if (
+    /简繁|繁简|简体|繁体|繁體|简中|繁中|简日|繁日|中日|日简|日繁|简|繁|體|内封|外挂|外掛|内嵌|內嵌|双语|雙語|中文字幕/.test(
+      trimmed
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
-function looksLikeTechnicalTag(value: string) {
+function looksLikeTechnicalBundle(value: string) {
   return (
     RESOLUTION_RE.test(value) ||
     CODEC_RE.test(value) ||
     BIT_DEPTH_RE.test(value) ||
     SOURCE_RE.test(value) ||
     AUDIO_RE.test(value) ||
-    SUBTITLE_RE.test(value)
+    /web-?dl|webrip|hevc|x264|x265|avc|aac|flac|mkv|mp4|catchplay|bilibili|netflix/i.test(
+      value
+    )
   );
+}
+
+function looksLikeTechnicalTag(value: string) {
+  return looksLikeTechnicalBundle(value) || looksLikeSubtitleTag(value);
 }
 
 function isRedundantTechnicalTag(

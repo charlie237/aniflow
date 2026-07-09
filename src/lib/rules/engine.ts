@@ -5,6 +5,11 @@ export interface RuleDecision {
   reasons: string[];
 }
 
+/**
+ * Strict filter: group / resolution / language must match as stored labels
+ * (trim + case-insensitive only). No alias buckets or fuzzy families.
+ * Stable for "lock one subtitle group + exact res/lang labels from the title".
+ */
 export function evaluateRules(
   title: string,
   metadata: ReleaseMetadata | Omit<ReleaseMetadata, "id" | "feedItemId">,

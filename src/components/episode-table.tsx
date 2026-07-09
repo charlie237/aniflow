@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   Eye,
   FileVideo,
+  FolderSync,
   PlayCircle,
   Plus,
   RotateCcw,
@@ -16,6 +17,7 @@ import {
 import {
   confirmJobAction,
   manualSupplementEpisodeAction,
+  reorganizeJobAction,
   retryJobAction
 } from "@/app/actions";
 import { Badge } from "@/components/ui/badge";
@@ -216,7 +218,7 @@ export function EpisodeTable({
               <TableHead className="w-28">状态</TableHead>
               <TableHead>发布</TableHead>
               <TableHead>文件</TableHead>
-              <TableHead className="w-28">更新</TableHead>
+              <TableHead className="w-28">发布时间</TableHead>
               <TableHead className="w-24 text-right">操作</TableHead>
             </TableRow>
           </TableHeader>
@@ -248,17 +250,37 @@ export function EpisodeTable({
                     <FileSummary files={row.files} />
                   </TableCell>
                   <TableCell className="data-digits text-xs">
-                    {formatDateTime(row.updatedAt)}
+                    {formatDateTime(
+                      row.item?.publishedAt ?? row.item?.firstSeenAt ?? row.updatedAt
+                    )}
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
                       {row.job?.status === "failed" ? (
-                        <form action={retryJobAction}>
-                          <input type="hidden" name="id" value={row.job.id} />
-                          <Button size="icon" variant="ghost" aria-label="重试">
-                            <RotateCcw className="size-4" />
-                          </Button>
-                        </form>
+                        <>
+                          <form action={retryJobAction}>
+                            <input type="hidden" name="id" value={row.job.id} />
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              aria-label="重新下载"
+                              title="重新提交离线下载"
+                            >
+                              <RotateCcw className="size-4" />
+                            </Button>
+                          </form>
+                          <form action={reorganizeJobAction}>
+                            <input type="hidden" name="id" value={row.job.id} />
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              aria-label="重新整理"
+                              title="只扫描整理，不重新下载"
+                            >
+                              <FolderSync className="size-4" />
+                            </Button>
+                          </form>
+                        </>
                       ) : null}
                       {row.job?.status === "needs_review" ? (
                         <form action={confirmJobAction}>

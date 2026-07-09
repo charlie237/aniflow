@@ -12,7 +12,7 @@ renamed into a Plex/Jellyfin style library path.
 
 - Next.js App Router, TypeScript, Tailwind CSS
 - shadcn/ui-style local components
-- SQLite via `better-sqlite3`
+- SQLite via `better-sqlite3` + Drizzle ORM (`src/lib/db/schema.ts`)
 - RSS XML parsing via `fast-xml-parser`
 - OpenList 115 offline download through `/api/fs/add_offline_download`
 - OpenList `/api/fs/list`, `/api/fs/rename`, `/api/fs/move` for organization
@@ -32,6 +32,23 @@ For the worker:
 ```bash
 npm run worker
 ```
+
+### Access control (optional)
+
+Set `AUTH_PASSWORD` in `.env` to require login for the web UI and APIs. Leave it
+empty for open local access (default).
+
+```bash
+AUTH_PASSWORD=your-strong-password
+# optional custom session signing secret
+AUTH_SECRET=
+```
+
+- Browser: password form at `/login`, session cookie lasts 7 days
+- API clients: `Authorization: Bearer <AUTH_PASSWORD>` or HTTP Basic
+  (`any-username:AUTH_PASSWORD`)
+- The dedicated worker process does not use this password; protect the host
+  network / reverse proxy if exposed
 
 ## Required OpenList Settings
 

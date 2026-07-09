@@ -1,25 +1,14 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { formatDateTime as formatDateTimeImpl } from "@/lib/time";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+/** @see {@link formatDateTimeImpl} — Asia/Shanghai display of UTC-stored timestamps. */
 export function formatDateTime(value?: string | null) {
-  if (!value) return "从未";
-  const date = parseDateTime(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const parts = new Intl.DateTimeFormat("zh-CN", {
-    timeZone: "Asia/Shanghai",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(date);
-  const part = (type: Intl.DateTimeFormatPartTypes) =>
-    parts.find((item) => item.type === type)?.value ?? "";
-  return `${part("month")}/${part("day")} ${part("hour")}:${part("minute")}`;
+  return formatDateTimeImpl(value);
 }
 
 export function compactNumber(value: number) {
@@ -47,11 +36,4 @@ export function formatFileSize(bytes: number | null | undefined) {
 
 export function toBool(value: unknown) {
   return value === true || value === "true" || value === "1" || value === 1;
-}
-
-function parseDateTime(value: string) {
-  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value)) {
-    return new Date(`${value.replace(" ", "T")}Z`);
-  }
-  return new Date(value);
 }

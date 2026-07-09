@@ -23,7 +23,8 @@ import {
 import type { RuleType, SystemSettings, WorkerTaskType } from "@/lib/db/types";
 import {
   confirmJob,
-  retryJob,
+  reorganizeJob,
+  retryJob
 } from "@/lib/worker/pipeline";
 import { kickWorkerTaskRunner } from "@/lib/worker/tasks";
 import {
@@ -93,7 +94,11 @@ const settingsSchema = z.object({
   proxyEnabled: z.boolean().default(false),
   proxyUrl: z.string().optional().default("http://127.0.0.1:7890"),
   tmdbBearerToken: z.string().optional().default(""),
-  workerIntervalSeconds: z.coerce.number().int().min(30).max(86400)
+  workerIntervalSeconds: z.coerce.number().int().min(30).max(86400),
+  downloadTimeoutMinutes: z.coerce.number().int().min(1).max(24 * 60),
+  downloadAutoRetryEnabled: z.boolean().default(true),
+  downloadAutoRetryMaxAttempts: z.coerce.number().int().min(1).max(20),
+  downloadAutoRetryCooldownMinutes: z.coerce.number().int().min(1).max(24 * 60)
 });
 
 const manualEpisodeSchema = z.object({
@@ -304,6 +309,13 @@ export async function retryJobAction(formData: FormData) {
   revalidatePath("/");
 }
 
+/** Only re-scan/re-organize; do not re-submit offline download. */
+export async function reorganizeJobAction(formData: FormData) {
+  const id = Number(formData.get("id"));
+  if (Number.isFinite(id)) await reorganizeJob(id);
+  revalidatePath("/");
+}
+
 export async function confirmJobAction(formData: FormData) {
   const id = Number(formData.get("id"));
   if (Number.isFinite(id)) await confirmJob(id);
@@ -457,7 +469,13 @@ function parseSettingsForm(formData: FormData): SystemSettings {
     proxyEnabled: toBool(formData.get("proxyEnabled")),
     proxyUrl: formData.get("proxyUrl")?.toString() ?? "http://127.0.0.1:7890",
     tmdbBearerToken: formData.get("tmdbBearerToken")?.toString() ?? "",
-    workerIntervalSeconds: formData.get("workerIntervalSeconds") ?? 300
+    workerIntervalSeconds: formData.get("workerIntervalSeconds") ?? 300,
+    downloadTimeoutMinutes: formData.get("downloadTimeoutMinutes") ?? 30,
+    downloadAutoRetryEnabled: toBool(formData.get("downloadAutoRetryEnabled")),
+    downloadAutoRetryMaxAttempts:
+      formData.get("downloadAutoRetryMaxAttempts") ?? 3,
+    downloadAutoRetryCooldownMinutes:
+      formData.get("downloadAutoRetryCooldownMinutes") ?? 10
   }) satisfies SystemSettings;
   return parsed;
 }

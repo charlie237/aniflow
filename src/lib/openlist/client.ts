@@ -48,6 +48,76 @@ export async function add115OfflineDownload(params: {
   return payload.tasks ?? [];
 }
 
+/** List unfinished OpenList offline-download tasks. */
+export async function listOfflineDownloadUndone() {
+  return listTaskEndpoint("/api/task/offline_download/undone");
+}
+
+/** List finished OpenList offline-download tasks (success or error). */
+export async function listOfflineDownloadDone() {
+  return listTaskEndpoint("/api/task/offline_download/done");
+}
+
+/** List unfinished offline-download transfer tasks (post-115 transfer). */
+export async function listOfflineDownloadTransferUndone() {
+  return listTaskEndpoint("/api/task/offline_download_transfer/undone");
+}
+
+export function isOfflineTaskFailed(task: OpenListTask) {
+  if (task.error && String(task.error).trim()) return true;
+  const state = normalizeTaskState(task.state);
+  if (state === "failed" || state === "error" || state === "canceled" || state === "cancelled") {
+    return true;
+  }
+  // Alist-style numeric states: 0 pending, 1 running, 2 success, others often failure.
+  if (typeof task.state === "number" && task.state >= 3) return true;
+  const status = String(task.status ?? "").toLowerCase();
+  return /fail|error|cancel|abort/.test(status);
+}
+
+export function isOfflineTaskSucceeded(task: OpenListTask) {
+  if (isOfflineTaskFailed(task)) return false;
+  const state = normalizeTaskState(task.state);
+  if (state === "succeeded" || state === "success" || state === "done" || state === "completed") {
+    return true;
+  }
+  if (typeof task.state === "number" && task.state === 2) return true;
+  const status = String(task.status ?? "").toLowerCase();
+  return /success|succeeded|done|completed|finish/.test(status);
+}
+
+async function listTaskEndpoint(endpoint: string): Promise<OpenListTask[]> {
+  try {
+    const payload = await openListGet<OpenListTask[] | { content?: OpenListTask[]; tasks?: OpenListTask[] }>(
+      endpoint
+    );
+    if (Array.isArray(payload)) return payload.map(normalizeTask);
+    if (payload && typeof payload === "object") {
+      const list = payload.content ?? payload.tasks ?? [];
+      return Array.isArray(list) ? list.map(normalizeTask) : [];
+    }
+    return [];
+  } catch {
+    // Task listing is best-effort; OpenList builds may omit these endpoints.
+    return [];
+  }
+}
+
+function normalizeTask(task: OpenListTask): OpenListTask {
+  return {
+    id: String(task.id ?? ""),
+    name: String(task.name ?? ""),
+    state: task.state,
+    status: String(task.status ?? ""),
+    progress: Number(task.progress ?? 0),
+    error: String(task.error ?? "")
+  };
+}
+
+function normalizeTaskState(state: number | string | undefined) {
+  return String(state ?? "").toLowerCase();
+}
+
 export async function configure115TempDir(tempDir: string) {
   const settings = getSystemSettings();
   const endpoint =

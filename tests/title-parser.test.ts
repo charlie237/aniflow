@@ -110,6 +110,16 @@ describe("parseReleaseTitle", () => {
     expect(parsed.tags).not.toContain("WebRip 1080p HEVC-10bit AAC");
   });
 
+  it("does not treat CATCHPLAY / WEB-DL technical tags as subtitle language", () => {
+    const parsed = parseReleaseTitle(
+      "[Nix-Raws] 少女怪兽焦糖味 / Kaiju Girl Caramelise S01E01 [CATCHPLAY WEB-DL 1080p AVC AAC][简繁内封]"
+    );
+
+    expect(parsed.resolution).toBe("1080p");
+    expect(parsed.subtitleLanguage).toBe("简繁内封");
+    expect(parsed.subtitleLanguage).not.toMatch(/CATCHPLAY|WEB-DL|AVC/i);
+  });
+
   it("keeps only resolution from bundled technical tags", () => {
     const parsed = parseReleaseTitle(
       "[Group] Some Anime - 02 [WebRip 1080p HEVC-10bit AAC][CHS]"

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   add115OfflineDownload,
   configure115TempDir,
+  isOfflineTaskFailed,
+  isOfflineTaskSucceeded,
   moveOpenListFiles,
   removeOpenListFiles
 } from "@/lib/openlist/client";
@@ -19,7 +21,11 @@ const settingsMock = vi.hoisted(() => ({
     proxyEnabled: false,
     proxyUrl: "http://127.0.0.1:7890",
     tmdbBearerToken: "",
-    workerIntervalSeconds: 300
+    workerIntervalSeconds: 300,
+    downloadTimeoutMinutes: 30,
+    downloadAutoRetryEnabled: true,
+    downloadAutoRetryMaxAttempts: 3,
+    downloadAutoRetryCooldownMinutes: 10
   }
 }));
 
@@ -134,4 +140,48 @@ describe("OpenList client", () => {
       })
     );
   });
+
+  it("classifies offline task failure and success states", () => {
+    expect(
+      isOfflineTaskFailed({
+        id: "1",
+        name: "a",
+        state: 0,
+        status: "",
+        progress: 0,
+        error: "quota exceeded"
+      })
+    ).toBe(true);
+    expect(
+      isOfflineTaskFailed({
+        id: "2",
+        name: "b",
+        state: "failed",
+        status: "",
+        progress: 0,
+        error: ""
+      })
+    ).toBe(true);
+    expect(
+      isOfflineTaskSucceeded({
+        id: "3",
+        name: "c",
+        state: 2,
+        status: "",
+        progress: 100,
+        error: ""
+      })
+    ).toBe(true);
+    expect(
+      isOfflineTaskSucceeded({
+        id: "4",
+        name: "d",
+        state: 0,
+        status: "running",
+        progress: 10,
+        error: ""
+      })
+    ).toBe(false);
+  });
 });
+

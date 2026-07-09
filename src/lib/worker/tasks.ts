@@ -2,6 +2,7 @@ import {
   claimNextWorkerTask,
   completeWorkerTask,
   failWorkerTask,
+  requeueFailedWorkerTasks,
   requeueStaleWorkerTasks
 } from "@/lib/db/repositories";
 import type { WorkerTask } from "@/lib/db/types";
@@ -10,6 +11,7 @@ import {
   type DeletedSubscriptionIncomingCleanup,
   pollAllSubscriptions,
   pollSubscription,
+  reconcileDownloadingJobs,
   scanAndRenameIncoming,
   submitQueuedJobs
 } from "@/lib/worker/pipeline";
@@ -33,21 +35,32 @@ export function kickWorkerTaskRunner() {
 }
 
 export async function processWorkerTaskQueue(maxTasks = 20) {
-  requeueStaleWorkerTasks();
+  const stale = requeueStaleWorkerTasks();
+  const retried = requeueFailedWorkerTasks();
+  if (stale > 0 || retried > 0) {
+    console.log(
+      `[worker] requeue stale=${stale} failed_tasks=${retried}`
+    );
+  }
+
   let processed = 0;
 
   while (processed < maxTasks) {
     const task = claimNextWorkerTask();
     if (!task) break;
 
+    const label = `task#${task.id} ${task.type}`;
+    console.log(`[worker] ${label} start attempts=${task.attempts}`);
     try {
-      await runWorkerTask(task);
-      completeWorkerTask(task.id);
-    } catch (error) {
-      failWorkerTask(
-        task.id,
-        error instanceof Error ? error.message : String(error)
+      const result = await runWorkerTask(task);
+      completeWorkerTask(task.id, result ?? { ok: true });
+      console.log(
+        `[worker] ${label} ok ${summarizeResult(result)}`
       );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failWorkerTask(task.id, message, { ok: false, error: message });
+      console.error(`[worker] ${label} fail: ${message}`);
     }
     processed += 1;
   }
@@ -55,27 +68,41 @@ export async function processWorkerTaskQueue(maxTasks = 20) {
   return { processed };
 }
 
-async function runWorkerTask(task: WorkerTask) {
+async function runWorkerTask(
+  task: WorkerTask
+): Promise<Record<string, unknown> | void> {
   switch (task.type) {
     case "poll_all":
-      await pollAllSubscriptions();
-      break;
+      return (await pollAllSubscriptions()) as unknown as Record<string, unknown>;
     case "poll_subscription":
       if (!task.subscriptionId) {
         throw new Error("Missing subscription id for poll task");
       }
-      await pollSubscription(task.subscriptionId);
-      break;
+      return (await pollSubscription(
+        task.subscriptionId
+      )) as unknown as Record<string, unknown>;
     case "cleanup_subscription_incoming":
-      await cleanupDeletedSubscriptionIncoming(parseCleanupPayload(task.payloadJson));
-      break;
+      return (await cleanupDeletedSubscriptionIncoming(
+        parseCleanupPayload(task.payloadJson)
+      )) as unknown as Record<string, unknown>;
     case "scan_incoming":
+      await reconcileDownloadingJobs();
       await scanAndRenameIncoming();
-      break;
+      return { ok: true, action: "scan_incoming" };
     case "submit_queued":
       await submitQueuedJobs();
+      await reconcileDownloadingJobs();
       await scanAndRenameIncoming();
-      break;
+      return { ok: true, action: "submit_queued" };
+  }
+}
+
+function summarizeResult(result: Record<string, unknown> | void) {
+  if (!result) return "";
+  try {
+    return JSON.stringify(result);
+  } catch {
+    return "";
   }
 }
 

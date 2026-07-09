@@ -146,8 +146,10 @@ function RssPreviewResults({ preview }: { preview: RssPreview }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {visibleItems.map((item) => (
-            <TableRow key={`${item.guid}-${item.title}`}>
+          {visibleItems.map((item, index) => (
+            <TableRow
+              key={`${index}:${item.guid}:${item.downloadUrl ?? item.link ?? item.title}`}
+            >
               <TableCell className="max-w-[360px]">
                 <div className="truncate font-medium">{item.title}</div>
                 <div className="mt-1 text-xs text-[var(--muted)]">

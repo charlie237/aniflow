@@ -1,5 +1,6 @@
 import { XMLParser } from "fast-xml-parser";
 import { parseReleaseTitle, type ParsedReleaseTitle } from "@/lib/rss/title-parser";
+import { toStoredUtcIso } from "@/lib/time";
 
 export interface ParsedRssItem {
   guid: string;
@@ -51,9 +52,7 @@ function normalizeItem(item: Record<string, unknown> | null): ParsedRssItem | nu
   const downloadUrl = extractDownloadUrl(item, link);
   const rssGuid = textOf(item.guid) ?? textOf(item.id);
   const guid = rssGuid ?? downloadUrl ?? link ?? title;
-  const publishedAt = normalizeDate(
-    textOf(item.pubDate) ?? textOf(item.published) ?? textOf(item.updated)
-  );
+  const publishedAt = normalizeDate(extractPublishedAt(item));
 
   return {
     guid,
@@ -115,7 +114,7 @@ function looksLikeDownloadUrl(value: string) {
     value.startsWith("magnet:?") ||
     /\.torrent(?:\?|$)/i.test(value) ||
     /\/RSS\/Download\//i.test(value) ||
-    /mikanani\.me\/Home\/Episode/i.test(value)
+    /mikanani\.me\/Download\//i.test(value)
   );
 }
 
@@ -144,8 +143,25 @@ function toArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [value];
 }
 
+/**
+ * Mikan puts the release time under <torrent><pubDate>, not top-level <pubDate>.
+ * Also accept Atom and common RSS variants.
+ */
+function extractPublishedAt(item: Record<string, unknown>) {
+  const torrent = getObject(item.torrent);
+  return (
+    textOf(item.pubDate) ??
+    textOf(item.pubdate) ??
+    textOf(item.published) ??
+    textOf(item.updated) ??
+    textOf(torrent?.pubDate) ??
+    textOf(torrent?.pubdate) ??
+    textOf(item["dc:date"]) ??
+    null
+  );
+}
+
 function normalizeDate(value: string | null) {
-  if (!value) return null;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+  // Naive Mikan times are China local; toStoredUtcIso converts to real UTC.
+  return toStoredUtcIso(value);
 }

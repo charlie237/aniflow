@@ -6,6 +6,10 @@ services:
       - "3000:3000"
     env_file:
       - .env
+    environment:
+      # Optional: set AUTH_PASSWORD in .env to lock the UI/API
+      AUTH_PASSWORD: ${AUTH_PASSWORD:-}
+      AUTH_SECRET: ${AUTH_SECRET:-}
     volumes:
       - ./data:/app/data
     restart: unless-stopped

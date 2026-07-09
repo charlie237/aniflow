@@ -1,25 +1,46 @@
 import Database from "better-sqlite3";
-import { dirname, resolve } from "node:path";
+import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { appConfig } from "@/lib/config";
+import { schema } from "@/lib/db/schema";
 
-let db: Database.Database | null = null;
+type AppDatabase = BetterSQLite3Database<typeof schema>;
 
-export function getDb() {
+let sqlite: Database.Database | null = null;
+let db: AppDatabase | null = null;
+
+/** Drizzle query API (preferred). */
+export function getDb(): AppDatabase {
   if (db) return db;
+  const raw = getSqlite();
+  db = drizzle(raw, { schema });
+  return db;
+}
+
+/** Raw better-sqlite3 handle for bootstrap, complex SQL, and tests. */
+export function getSqlite(): Database.Database {
+  if (sqlite) return sqlite;
 
   const databasePath = resolve(appConfig.databasePath);
   mkdirSync(dirname(databasePath), { recursive: true });
 
-  db = new Database(databasePath);
-  db.pragma("journal_mode = WAL");
-  db.pragma("foreign_keys = ON");
-  db.pragma("busy_timeout = 5000");
-  migrate(db);
-  return db;
+  sqlite = new Database(databasePath);
+  sqlite.pragma("journal_mode = WAL");
+  sqlite.pragma("foreign_keys = ON");
+  sqlite.pragma("busy_timeout = 5000");
+  bootstrapSchema(sqlite);
+  return sqlite;
 }
 
-function migrate(database: Database.Database) {
+/** @deprecated Use getDb() (Drizzle) or getSqlite() explicitly. */
+export function getRawDb() {
+  return getSqlite();
+}
+
+function bootstrapSchema(database: Database.Database) {
+  // Keep imperative bootstrap so existing SQLite files upgrade in place.
+  // Table shapes match src/lib/db/schema.ts.
   database.exec(`
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,

@@ -42,4 +42,48 @@ describe("parseRss", () => {
     expect(items[0]?.rssGuid).toBeNull();
     expect(items[0]?.guid).toBe("https://mikanani.me/Download/episode-3.torrent");
   });
+
+  it("does not treat Mikan episode pages as download URLs", () => {
+    const xml = `<?xml version="1.0"?>
+      <rss version="2.0">
+        <channel>
+          <item>
+            <title>[Group] Test Anime - 04 [1080p][CHS].mkv</title>
+            <link>https://mikanani.me/Home/Episode/only-page</link>
+            <guid>episode-4</guid>
+          </item>
+        </channel>
+      </rss>`;
+
+    const items = parseRss(xml);
+
+    expect(items[0]?.link).toBe("https://mikanani.me/Home/Episode/only-page");
+    expect(items[0]?.downloadUrl).toBeNull();
+  });
+
+  it("reads Mikan torrent.pubDate when top-level pubDate is missing", () => {
+    const xml = `<?xml version="1.0"?>
+      <rss version="2.0">
+        <channel>
+          <item>
+            <title>[Group] Test Anime - 05 [1080p][CHS].mkv</title>
+            <guid>episode-5</guid>
+            <link>https://mikanani.me/Home/Episode/abc</link>
+            <enclosure url="https://mikanani.me/Download/episode-5.torrent" type="application/x-bittorrent" />
+            <torrent xmlns="https://mikanani.me/0.1/">
+              <link>https://mikanani.me/Home/Episode/abc</link>
+              <contentLength>123</contentLength>
+              <pubDate>2026-07-09T04:08:42.455</pubDate>
+            </torrent>
+          </item>
+        </channel>
+      </rss>`;
+
+    const items = parseRss(xml);
+
+    // Mikan naive time is China local (UTC+8) → store real UTC
+    expect(items[0]?.publishedAt).toBe("2026-07-08T20:08:42.455Z");
+  });
 });
+
+
