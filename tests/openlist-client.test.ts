@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   add115OfflineDownload,
   configure115TempDir,
+  isAlreadyExistsErrorMessage,
+  isAlreadyInOfflineListErrorMessage,
   isOfflineTaskFailed,
   isOfflineTaskSucceeded,
   moveOpenListFiles,
@@ -37,6 +39,25 @@ describe("OpenList client", () => {
   afterEach(() => {
     settingsMock.value.openlist115Mode = "115 Cloud";
     vi.restoreAllMocks();
+  });
+
+  it("does not treat does-not-exist as already-exists", () => {
+    expect(isAlreadyExistsErrorMessage("path does not exist")).toBe(false);
+    expect(isAlreadyExistsErrorMessage("directory does not exist")).toBe(false);
+    expect(isAlreadyExistsErrorMessage("object already exists")).toBe(true);
+    expect(isAlreadyExistsErrorMessage("file already exists")).toBe(true);
+  });
+
+  it("does not treat path errors as already-in-offline-list", () => {
+    expect(isAlreadyInOfflineListErrorMessage("path does not exist")).toBe(false);
+    expect(isAlreadyInOfflineListErrorMessage("directory does not exist")).toBe(
+      false
+    );
+    expect(isAlreadyInOfflineListErrorMessage("URL already in the offline list")).toBe(
+      true
+    );
+    expect(isAlreadyInOfflineListErrorMessage("task url already exists")).toBe(true);
+    expect(isAlreadyInOfflineListErrorMessage("离线任务已存在")).toBe(true);
   });
 
   it("submits RSS URLs through OpenList 115 offline download", async () => {

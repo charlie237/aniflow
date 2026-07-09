@@ -701,15 +701,19 @@ export function markJobAttempt(jobId: number, fields: Partial<DownloadJob>) {
     .update(downloadJobs)
     .set({
       status: fields.status ? fields.status : sql`${downloadJobs.status}`,
+      // Allow explicitly clearing openlistTaskId with null; only skip when undefined.
       openlistTaskId:
-        fields.openlistTaskId !== undefined && fields.openlistTaskId !== null
+        fields.openlistTaskId !== undefined
           ? fields.openlistTaskId
           : sql`${downloadJobs.openlistTaskId}`,
       targetPath:
         fields.targetPath !== undefined && fields.targetPath !== null
           ? fields.targetPath
           : sql`${downloadJobs.targetPath}`,
-      errorMessage: fields.errorMessage ?? null,
+      errorMessage:
+        fields.errorMessage !== undefined
+          ? fields.errorMessage
+          : sql`${downloadJobs.errorMessage}`,
       attempts: sql`${downloadJobs.attempts} + 1`,
       updatedAt: sql`CURRENT_TIMESTAMP`
     })
@@ -768,6 +772,27 @@ export function updateJobStatus(
     .run();
 }
 
+/**
+ * Atomically claim a queued job for offline submit.
+ * Returns false if another worker already took it (or status changed).
+ */
+export function claimQueuedJob(jobId: number) {
+  const result = getSqlite()
+    .prepare(
+      `UPDATE download_jobs SET
+        status = 'downloading',
+        error_message = CASE
+          WHEN error_message IS NULL OR error_message = '' THEN 'Submitting offline download'
+          ELSE error_message
+        END,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?
+         AND status = 'queued'`
+    )
+    .run(jobId);
+  return result.changes > 0;
+}
+
 export function failStaleDownloadingJobs(
   maxAgeSeconds?: number,
   errorMessage = "Download timed out waiting for OpenList / 115 completion"
@@ -775,17 +800,25 @@ export function failStaleDownloadingJobs(
   const ageSeconds =
     maxAgeSeconds ??
     Math.max(1, getSystemSettings().downloadTimeoutMinutes) * 60;
+  // ready_to_rename can also get stuck (rename not-found previously left jobs there).
   return getSqlite()
     .prepare(
       `UPDATE download_jobs SET
         status = 'failed',
         openlist_task_id = NULL,
-        error_message = ?,
+        error_message = CASE
+          WHEN status = 'ready_to_rename' THEN ?
+          ELSE ?
+        END,
         updated_at = CURRENT_TIMESTAMP
-       WHERE status = 'downloading'
+       WHERE status IN ('downloading', 'ready_to_rename')
          AND datetime(updated_at) < datetime('now', ?)`
     )
-    .run(errorMessage, `-${Math.max(60, ageSeconds)} seconds`).changes;
+    .run(
+      "Rename timed out waiting for OpenList file organization",
+      errorMessage,
+      `-${Math.max(60, ageSeconds)} seconds`
+    ).changes;
 }
 
 export function requeueFailedDownloadJobs() {

@@ -112,6 +112,84 @@ export function pickBestIncomingSubscriptionMatch(
   return ranked[0].subscription;
 }
 
+/** Minimum identity score for linking an incoming file to a tracked download job. */
+export const MIN_TRACKED_JOB_MATCH_SCORE = 40;
+
+/**
+ * Score whether a downloading job is the right owner for an incoming file.
+ * Episode equality is assumed by the caller; this only scores identity signals.
+ * A hard group mismatch scores 0.
+ */
+export function scoreTrackedJobIdentity(params: {
+  subscriptionName: string;
+  feedTitle: string;
+  metadata: Pick<
+    ReleaseMetadata,
+    "releaseGroup" | "parsedTitle" | "resolution" | "subtitleLanguage" | "releaseRevision"
+  >;
+  filename: string;
+  parsed: Pick<
+    ParsedReleaseTitle,
+    "releaseGroup" | "parsedTitle" | "resolution" | "subtitleLanguage" | "releaseRevision"
+  >;
+}): number {
+  const { subscriptionName, feedTitle, metadata, filename, parsed } = params;
+  const normalizedFilename = filename.toLowerCase();
+  const group = metadata.releaseGroup?.trim() ?? "";
+  const parsedGroup = parsed.releaseGroup?.trim() ?? "";
+
+  // Both sides have a group and they disagree → never this job.
+  if (group && parsedGroup && !equalsLoose(group, parsedGroup)) {
+    return 0;
+  }
+
+  let score = 0;
+
+  if (group && parsedGroup && equalsLoose(group, parsedGroup)) {
+    score += 50;
+  } else if (group && normalizedFilename.includes(group.toLowerCase())) {
+    score += 45;
+  }
+
+  const subName = subscriptionName.trim().toLowerCase();
+  if (subName && normalizedFilename.includes(subName)) {
+    score += 40;
+  }
+
+  const metaTitle = metadata.parsedTitle?.trim().toLowerCase() ?? "";
+  if (metaTitle && normalizedFilename.includes(metaTitle)) {
+    score += 30;
+  }
+
+  const feed = feedTitle.trim().toLowerCase();
+  if (feed && (normalizedFilename.includes(feed) || feed.includes(normalizedFilename.slice(0, 40)))) {
+    // Weak: full feed titles are long; only count a clear containment either way.
+    if (normalizedFilename.length >= 8 && feed.includes(normalizedFilename.replace(/\.[a-z0-9]+$/i, ""))) {
+      score += 15;
+    }
+  }
+
+  if (
+    metadata.resolution &&
+    parsed.resolution &&
+    equalsLoose(metadata.resolution, parsed.resolution)
+  ) {
+    score += 10;
+  }
+  if (
+    metadata.subtitleLanguage &&
+    parsed.subtitleLanguage &&
+    equalsLoose(metadata.subtitleLanguage, parsed.subtitleLanguage)
+  ) {
+    score += 10;
+  }
+  if (metadata.releaseRevision === parsed.releaseRevision) {
+    score += 5;
+  }
+
+  return score;
+}
+
 function equalsLoose(left: string | null | undefined, right: string | null | undefined) {
   const a = (left ?? "").trim().toLowerCase();
   const b = (right ?? "").trim().toLowerCase();

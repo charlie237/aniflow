@@ -464,9 +464,41 @@ function isNotFoundError(error: unknown) {
   );
 }
 
+/**
+ * True only for positive "already exists" errors.
+ * Must not match "does not exist" / "not found" (bare "exist" is unsafe).
+ */
+export function isAlreadyExistsErrorMessage(message: string) {
+  if (/does\s+not\s+exist|not\s+found|找不到|不存在/i.test(message)) {
+    return false;
+  }
+  return /already\s+exists|file\s+exists|object\s+exists|已存在|已经存在/i.test(
+    message
+  );
+}
+
+/**
+ * True only for "URL already in offline list" style errors.
+ * Must not match "does not exist" (bare "exist" / "already" are unsafe).
+ */
+export function isAlreadyInOfflineListErrorMessage(message: string) {
+  if (/does\s+not\s+exist|not\s+found|找不到|不存在/i.test(message)) {
+    return false;
+  }
+  return (
+    /already\s+in\s+(the\s+)?offline/i.test(message) ||
+    /in\s+the\s+offline\s+list/i.test(message) ||
+    /duplicate\s+(url|task|download)/i.test(message) ||
+    /task\s+url\s+already/i.test(message) ||
+    /url\s+already\s+(exist|in)/i.test(message) ||
+    /离线.*(已存在|重复|已在)/i.test(message) ||
+    /(已存在|重复).*离线/i.test(message) ||
+    /任务.*重复|重复.*任务/i.test(message)
+  );
+}
+
 function isAlreadyExistsError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
-  return /already exists|exist|file exists|object exists/i.test(message);
+  return isAlreadyExistsErrorMessage(errorMessage(error));
 }
 
 function errorMessage(error: unknown) {

@@ -5,6 +5,7 @@ import type {
   Subscription
 } from "@/lib/db/types";
 import {
+  claimQueuedJob,
   createOrUpdateJob,
   failStaleDownloadingJobs,
   findMetadataBySubscription,
@@ -33,6 +34,7 @@ import { fetchText } from "@/lib/net/fetch";
 import {
   add115OfflineDownload,
   ensureOpenListDirectory,
+  isAlreadyInOfflineListErrorMessage,
   isOfflineTaskFailed,
   isOpenListNotFoundError,
   listOfflineDownloadDone,
@@ -58,8 +60,10 @@ import {
   joinRemotePath
 } from "@/lib/utils/path";
 import {
+  MIN_TRACKED_JOB_MATCH_SCORE,
   pickBestIncomingSubscriptionMatch,
-  scoreIncomingSubscriptionMatch
+  scoreIncomingSubscriptionMatch,
+  scoreTrackedJobIdentity
 } from "@/lib/worker/match";
 import {
   canImportReleaseRevision,
@@ -208,6 +212,21 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
 
     const existingJob = getJobForItem(feedItem.id);
     if (existingJob) {
+      // autoDownload was off when discovered; promote once enabled.
+      if (
+        existingJob.status === "discovered" &&
+        subscription.autoDownload &&
+        preferredFeedItemId === feedItem.id &&
+        existingJob.sourceUrl
+      ) {
+        updateJobStatus(existingJob.id, "queued", {
+          errorMessage: null,
+          targetPath:
+            subscription.incomingPath ?? getSystemSettings().openlistIncomingPath
+        });
+        result.queued += 1;
+        continue;
+      }
       result.skipped += 1;
       continue;
     }
@@ -411,6 +430,13 @@ export async function submitJob(job: DownloadJob) {
   }
 
   const targetPath = subscription.incomingPath ?? getSystemSettings().openlistIncomingPath;
+
+  // Atomic claim prevents web + worker double-submit of the same queued job.
+  if (job.status === "queued" && !claimQueuedJob(job.id)) {
+    console.log(`[pipeline] job#${job.id} already claimed by another worker`);
+    return;
+  }
+
   try {
     const offlineUrl = await resolveOfflineDownloadUrl(job.sourceUrl);
     await ensureOpenListDirectory(targetPath);
@@ -418,14 +444,17 @@ export async function submitJob(job: DownloadJob) {
       urls: [offlineUrl],
       path: targetPath
     });
+    const taskId = tasks[0]?.id ? String(tasks[0].id) : null;
     markJobAttempt(job.id, {
       status: "downloading",
-      openlistTaskId: tasks[0]?.id ?? null,
+      openlistTaskId: taskId,
       targetPath,
-      errorMessage: null
+      errorMessage: taskId
+        ? null
+        : "OpenList returned no offline task id; waiting for file or timeout"
     });
     console.log(
-      `[pipeline] job#${job.id} submitted offline task=${tasks[0]?.id ?? "n/a"}`
+      `[pipeline] job#${job.id} submitted offline task=${taskId ?? "n/a"}`
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -452,9 +481,7 @@ export async function submitJob(job: DownloadJob) {
 }
 
 function isAlreadyInOfflineListError(message: string) {
-  return /already|exist|duplicate|离线|已存在|in the offline|task url|重复/i.test(
-    message
-  );
+  return isAlreadyInOfflineListErrorMessage(message);
 }
 
 export async function scanAndRenameIncoming() {
@@ -684,13 +711,17 @@ async function renameIncomingFile(
       );
     }
   } catch (error) {
-    if (isOpenListNotFoundError(error)) return;
+    const message = error instanceof Error ? error.message : String(error);
+    // Previously not-found returned silently and left jobs stuck in ready_to_rename.
     if (match.job) {
       updateJobStatus(match.job.id, "failed", {
         targetPath: file.path,
-        errorMessage: error instanceof Error ? error.message : String(error)
+        errorMessage: isOpenListNotFoundError(error)
+          ? `Source file not found during rename: ${message}`
+          : message
       });
     }
+    if (isOpenListNotFoundError(error)) return;
     upsertEpisodeFile({
       subscriptionId: subscription.id,
       feedItemId,
@@ -699,7 +730,7 @@ async function renameIncomingFile(
       finalPath,
       sizeBytes: file.size,
       status: "failed",
-      errorMessage: error instanceof Error ? error.message : String(error)
+      errorMessage: message
     });
   }
 }
@@ -807,11 +838,13 @@ function findTrackedJobMatch(
   const subscriptionById = new Map(
     subscriptions.map((subscription) => [subscription.id, subscription])
   );
+  const filename = getRemoteBaseName(filePath);
 
   const candidates: Array<{
     subscription: Subscription;
     job: DownloadJob;
     metadata: ReleaseMetadata;
+    score: number;
   }> = [];
 
   for (const job of listJobsByStatus(["downloading", "ready_to_rename"])) {
@@ -831,12 +864,22 @@ function findTrackedJobMatch(
     const decision = evaluateRules(feedItem.title, metadata, listRules(subscription.id));
     if (!decision.allowed) continue;
 
-    candidates.push({ subscription, job, metadata });
+    const score = scoreTrackedJobIdentity({
+      subscriptionName: subscription.name,
+      feedTitle: feedItem.title,
+      metadata,
+      filename,
+      parsed
+    });
+    if (score < MIN_TRACKED_JOB_MATCH_SCORE) continue;
+
+    candidates.push({ subscription, job, metadata, score });
   }
 
   if (candidates.length === 0) return null;
 
   candidates.sort((left, right) => {
+    if (left.score !== right.score) return right.score - left.score;
     const leftExact = left.metadata.releaseRevision === parsed.releaseRevision ? 1 : 0;
     const rightExact = right.metadata.releaseRevision === parsed.releaseRevision ? 1 : 0;
     if (leftExact !== rightExact) return rightExact - leftExact;
@@ -845,6 +888,18 @@ function findTrackedJobMatch(
       right.job.id - left.job.id
     );
   });
+
+  // Ambiguous: two strong matches for different subscriptions — refuse rather than mis-file.
+  if (
+    candidates.length > 1 &&
+    candidates[0].score === candidates[1].score &&
+    candidates[0].subscription.id !== candidates[1].subscription.id
+  ) {
+    console.log(
+      `[pipeline] ambiguous tracked job match for ${filename} (score=${candidates[0].score})`
+    );
+    return null;
+  }
 
   const best = candidates[0];
   return { subscription: best.subscription, job: best.job };

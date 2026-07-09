@@ -9,8 +9,10 @@ process.env.DATABASE_PATH = dbPath;
 
 const { getSqlite } = await import("@/lib/db/client");
 const {
+  claimQueuedJob,
   createOrUpdateJob,
   createSubscription,
+  failStaleDownloadingJobs,
   getJob,
   requeueFailedDownloadJobs,
   saveSystemSettings,
@@ -161,5 +163,100 @@ describe("requeueFailedDownloadJobs", () => {
     const current = getSystemSettings();
     saveSystemSettings({ ...current, downloadAutoRetryEnabled: false });
     expect(requeueFailedDownloadJobs()).toBe(0);
+  });
+
+  it("claims a queued job only once", () => {
+    const sub = createSubscription({
+      name: "Claim Show",
+      rssUrl: "https://example.com/rss-claim",
+      seasonNumber: 1,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+
+    const feed = upsertFeedItem(sub, {
+      guid: "claim-1",
+      title: "[G] Claim Show - 01 [1080p][CHS].mkv",
+      downloadUrl: "magnet:?xt=urn:btih:claim",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Claim Show",
+        episodeNumber: 1,
+        episodeText: "01",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 80,
+        needsReview: false
+      }
+    });
+
+    const job = createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: feed.id,
+      status: "queued",
+      sourceUrl: "magnet:?xt=urn:btih:claim"
+    });
+    if (!job) return;
+
+    expect(claimQueuedJob(job.id)).toBe(true);
+    expect(claimQueuedJob(job.id)).toBe(false);
+    expect(getJob(job.id)?.status).toBe("downloading");
+  });
+
+  it("fails stale ready_to_rename jobs", () => {
+    const sub = createSubscription({
+      name: "Stale Rename",
+      rssUrl: "https://example.com/rss-stale-rename",
+      seasonNumber: 1,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+
+    const feed = upsertFeedItem(sub, {
+      guid: "stale-rename-1",
+      title: "[G] Stale Rename - 01 [1080p][CHS].mkv",
+      downloadUrl: "magnet:?xt=urn:btih:stale",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Stale Rename",
+        episodeNumber: 1,
+        episodeText: "01",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 80,
+        needsReview: false
+      }
+    });
+
+    createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: feed.id,
+      status: "ready_to_rename",
+      sourceUrl: "magnet:?xt=urn:btih:stale",
+      targetPath: "/115/Anime/_incoming"
+    });
+    getSqlite()
+      .prepare(
+        `UPDATE download_jobs SET updated_at = datetime('now', '-2 hours')
+         WHERE feed_item_id = ?`
+      )
+      .run(feed.id);
+
+    expect(failStaleDownloadingJobs(60)).toBe(1);
+    const job = getJob(
+      (
+        getSqlite()
+          .prepare("SELECT id FROM download_jobs WHERE feed_item_id = ?")
+          .get(feed.id) as { id: number }
+      ).id
+    );
+    expect(job?.status).toBe("failed");
+    expect(job?.errorMessage).toMatch(/Rename timed out/i);
   });
 });

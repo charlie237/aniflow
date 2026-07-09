@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { FilterRule, Subscription } from "@/lib/db/types";
 import { parseReleaseTitle } from "@/lib/rss/title-parser";
 import {
+  MIN_TRACKED_JOB_MATCH_SCORE,
   pickBestIncomingSubscriptionMatch,
-  scoreIncomingSubscriptionMatch
+  scoreIncomingSubscriptionMatch,
+  scoreTrackedJobIdentity
 } from "@/lib/worker/match";
 
 function subscription(partial: Partial<Subscription> & { id: number; name: string }): Subscription {
@@ -146,5 +148,76 @@ describe("pickBestIncomingSubscriptionMatch", () => {
       }
     ]);
     expect(picked?.id).toBe(2);
+  });
+});
+
+describe("scoreTrackedJobIdentity", () => {
+  it("rejects hard release-group mismatch", () => {
+    const score = scoreTrackedJobIdentity({
+      subscriptionName: "Show A",
+      feedTitle: "[GroupA] Show A - 05 [1080p]",
+      metadata: {
+        releaseGroup: "GroupA",
+        parsedTitle: "Show A",
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        releaseRevision: 1
+      },
+      filename: "[GroupB] Show B - 05 [1080p].mkv",
+      parsed: {
+        releaseGroup: "GroupB",
+        parsedTitle: "Show B",
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        releaseRevision: 1
+      }
+    });
+    expect(score).toBe(0);
+  });
+
+  it("scores strongly when group and subscription name match", () => {
+    const score = scoreTrackedJobIdentity({
+      subscriptionName: "Show A",
+      feedTitle: "[GroupA] Show A - 05 [1080p][CHS]",
+      metadata: {
+        releaseGroup: "GroupA",
+        parsedTitle: "Show A",
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        releaseRevision: 1
+      },
+      filename: "[GroupA] Show A - 05 [1080p][CHS].mkv",
+      parsed: {
+        releaseGroup: "GroupA",
+        parsedTitle: "Show A",
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        releaseRevision: 1
+      }
+    });
+    expect(score).toBeGreaterThanOrEqual(MIN_TRACKED_JOB_MATCH_SCORE);
+  });
+
+  it("does not accept episode-only identity under the threshold", () => {
+    const score = scoreTrackedJobIdentity({
+      subscriptionName: "Completely Different",
+      feedTitle: "[Other] Other Show - 05",
+      metadata: {
+        releaseGroup: "Other",
+        parsedTitle: "Other Show",
+        resolution: "720p",
+        subtitleLanguage: "JPN",
+        releaseRevision: 1
+      },
+      filename: "random-file-05.mkv",
+      parsed: {
+        releaseGroup: null,
+        parsedTitle: null,
+        resolution: null,
+        subtitleLanguage: null,
+        releaseRevision: 1
+      }
+    });
+    expect(score).toBeLessThan(MIN_TRACKED_JOB_MATCH_SCORE);
   });
 });

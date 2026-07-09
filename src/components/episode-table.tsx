@@ -282,10 +282,16 @@ export function EpisodeTable({
                           </form>
                         </>
                       ) : null}
-                      {row.job?.status === "needs_review" ? (
+                      {row.job?.status === "needs_review" ||
+                      row.job?.status === "discovered" ? (
                         <form action={confirmJobAction}>
                           <input type="hidden" name="id" value={row.job.id} />
-                          <Button size="icon" variant="ghost" aria-label="确认下载">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            aria-label="确认下载"
+                            title="确认并提交下载"
+                          >
                             <CheckCircle2 className="size-4" />
                           </Button>
                         </form>
