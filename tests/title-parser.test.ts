@@ -101,6 +101,63 @@ describe("parseReleaseTitle", () => {
     expect(parsed.releaseRevision).toBe(2);
   });
 
+  it("extracts release revisions from standalone tags and dotted forms", () => {
+    const cases: Array<{ title: string; episode: number; revision: number }> = [
+      {
+        title: "[Group] Anime - 04 [1080p][v2]",
+        episode: 4,
+        revision: 2
+      },
+      {
+        title: "[Group] Anime - 04 [v2][1080p]",
+        episode: 4,
+        revision: 2
+      },
+      {
+        title: "[Group] Anime [04][v2][1080p]",
+        episode: 4,
+        revision: 2
+      },
+      {
+        title: "[Group] Anime S01E04.v2 [1080p]",
+        episode: 4,
+        revision: 2
+      },
+      {
+        title: "Anime.S01E04.v2.1080p.mkv",
+        episode: 4,
+        revision: 2
+      },
+      {
+        title: "[Group] Anime 第04话v2 [1080p]",
+        episode: 4,
+        revision: 2
+      },
+      {
+        title: "[ANi] Anime - 05 [1080P][Baha][WEB-DL][AAC AVC][CHT][MP4][v2]",
+        episode: 5,
+        revision: 2
+      },
+      {
+        title: "[Group] Anime - 04v3 [1080p]",
+        episode: 4,
+        revision: 3
+      }
+    ];
+
+    for (const entry of cases) {
+      const parsed = parseReleaseTitle(entry.title);
+      expect(parsed.episodeNumber, entry.title).toBe(entry.episode);
+      expect(parsed.releaseRevision, entry.title).toBe(entry.revision);
+    }
+  });
+
+  it("defaults revision to 1 when no vN marker is present", () => {
+    const parsed = parseReleaseTitle("[Group] Anime - 04 [1080p][CHS].mkv");
+    expect(parsed.episodeNumber).toBe(4);
+    expect(parsed.releaseRevision).toBe(1);
+  });
+
   it("does not keep redundant technical bundles as extra tags", () => {
     const parsed = parseReleaseTitle(
       "[LoliHouse] 无职转生 3期 / Mushoku Tensei S3 - 02 [WebRip 1080p HEVC-10bit AAC][简繁内封字幕]"

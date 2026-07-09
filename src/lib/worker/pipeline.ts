@@ -12,12 +12,16 @@ import {
   getJob,
   getJobForFeedItem,
   getMetadataForFeedItem,
+  getHighestReleaseRevisionForVariant,
+  getLibraryFileRevisionAtPath,
   getPreferredFeedItemIdForRelease,
   getSystemSettings,
   getSubscription,
+  libraryFileExistsAtPath,
   listEnabledSubscriptions,
   listJobsByStatus,
   listRules,
+  listVariantFeedItemIds,
   markJobAttempt,
   requeueFailedDownloadJobs,
   touchSubscriptionPolled,
@@ -57,6 +61,11 @@ import {
   pickBestIncomingSubscriptionMatch,
   scoreIncomingSubscriptionMatch
 } from "@/lib/worker/match";
+import {
+  canImportReleaseRevision,
+  canOverwriteLibraryFile,
+  resolveClaimedRevision
+} from "@/lib/worker/revision-policy";
 
 export interface PipelineResult {
   /** Total items in the RSS feed this poll. */
@@ -152,8 +161,14 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
   result.fetched = items.length;
   const rules = listRules(subscription.id);
 
+  // Phase 1: cache every rule-matching item so preferred revision is known
+  // before any job is created (first download goes straight to v2 when present).
+  const candidates: Array<{
+    feedItemId: number;
+    downloadUrl: string | null;
+  }> = [];
+
   for (const item of items) {
-    // Gate on rules before any DB write — only matching releases are stored.
     const decision = evaluateRules(item.title, item.metadata, rules);
     if (!decision.allowed) {
       result.skipped += 1;
@@ -162,20 +177,33 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
 
     const feedItem = upsertFeedItem(subscription, item);
     result.discovered += 1;
-    const metadata: ReleaseMetadata | Omit<ReleaseMetadata, "id" | "feedItemId"> =
-      getMetadataForFeedItem(feedItem.id) ?? {
-        ...item.metadata,
-        releaseRevision: item.metadata.releaseRevision ?? 1
-      };
+    candidates.push({
+      feedItemId: feedItem.id,
+      downloadUrl: item.downloadUrl
+    });
+  }
+
+  // Phase 2: only the preferred revision per variant may create/keep a job.
+  for (const candidate of candidates) {
+    const feedItem = getFeedItem(candidate.feedItemId);
+    const metadata = getMetadataForFeedItem(candidate.feedItemId);
+    if (!feedItem || !metadata) {
+      result.skipped += 1;
+      continue;
+    }
 
     const preferredFeedItemId = getPreferredFeedItemIdForRelease(
       subscription.id,
-      metadata as ReleaseMetadata
+      metadata
     );
     if (preferredFeedItemId != null && preferredFeedItemId !== feedItem.id) {
       markSupersededJob(feedItem.id);
       result.skipped += 1;
       continue;
+    }
+
+    if (preferredFeedItemId === feedItem.id) {
+      supersedeSiblingRevisionJobs(subscription.id, feedItem.id, metadata);
     }
 
     const existingJob = getJobForItem(feedItem.id);
@@ -184,7 +212,7 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
       continue;
     }
 
-    if (!item.downloadUrl) {
+    if (!candidate.downloadUrl) {
       createOrUpdateJob({
         subscriptionId: subscription.id,
         feedItemId: feedItem.id,
@@ -195,12 +223,12 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
       continue;
     }
 
-    if (!metadata || metadata.needsReview || metadata.episodeNumber == null) {
+    if (metadata.needsReview || metadata.episodeNumber == null) {
       createOrUpdateJob({
         subscriptionId: subscription.id,
         feedItemId: feedItem.id,
         status: "needs_review",
-        sourceUrl: item.downloadUrl,
+        sourceUrl: candidate.downloadUrl,
         errorMessage: "Episode number could not be parsed"
       });
       result.skipped += 1;
@@ -212,7 +240,7 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
         subscriptionId: subscription.id,
         feedItemId: feedItem.id,
         status: "discovered",
-        sourceUrl: item.downloadUrl
+        sourceUrl: candidate.downloadUrl
       });
       result.skipped += 1;
       continue;
@@ -222,7 +250,7 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
       subscriptionId: subscription.id,
       feedItemId: feedItem.id,
       status: "queued",
-      sourceUrl: item.downloadUrl,
+      sourceUrl: candidate.downloadUrl,
       targetPath: subscription.incomingPath ?? getSystemSettings().openlistIncomingPath
     });
     result.queued += 1;
@@ -367,6 +395,10 @@ export async function submitJob(job: DownloadJob) {
         errorMessage: "Superseded by a newer release revision"
       });
       return;
+    }
+
+    if (preferredFeedItemId === feedItem.id) {
+      supersedeSiblingRevisionJobs(subscription.id, feedItem.id, metadata);
     }
 
     const decision = evaluateRules(feedItem.title, metadata, listRules(subscription.id));
@@ -518,11 +550,85 @@ async function renameIncomingFile(
   const sourceDir = getRemoteDirName(file.path);
   let currentName = getRemoteBaseName(file.path);
   let currentPath = file.path;
+  const jobMetadata = match.job
+    ? getMetadataForFeedItem(match.job.feedItemId)
+    : null;
   const feedItemId = match.job?.feedItemId ?? null;
   const cleanupRoot = match.job?.targetPath ?? incomingPathForSubscription(subscription);
-  // When enabled, replace any existing library file at the same final path
-  // (same episode from a newer revision, different group, or re-download).
-  const shouldReplaceExisting = settings.replaceExistingOnRevision;
+
+  const variantFacets = {
+    episodeNumber: jobMetadata?.episodeNumber ?? parsed.episodeNumber,
+    releaseGroup: jobMetadata?.releaseGroup ?? parsed.releaseGroup,
+    resolution: jobMetadata?.resolution ?? parsed.resolution,
+    subtitleLanguage: jobMetadata?.subtitleLanguage ?? parsed.subtitleLanguage
+  };
+  const claimedRevision = resolveClaimedRevision({
+    jobMetadataRevision: jobMetadata?.releaseRevision,
+    parsedRevision: parsed.releaseRevision
+  });
+  const highestKnown = getHighestReleaseRevisionForVariant(
+    subscription.id,
+    variantFacets
+  );
+  const importDecision = canImportReleaseRevision({
+    claimedRevision,
+    highestKnownRevision: highestKnown
+  });
+  if (!importDecision.allow) {
+    if (match.job) {
+      updateJobStatus(match.job.id, "skipped", {
+        targetPath: file.path,
+        errorMessage: importDecision.reason
+      });
+    }
+    console.log(
+      `[pipeline] skip import ${file.name}: ${importDecision.reason}`
+    );
+    return;
+  }
+
+  // Preferred feed item may have moved on while this file was still downloading.
+  if (match.job && jobMetadata) {
+    const preferredFeedItemId = getPreferredFeedItemIdForRelease(
+      subscription.id,
+      jobMetadata
+    );
+    if (preferredFeedItemId != null && preferredFeedItemId !== match.job.feedItemId) {
+      updateJobStatus(match.job.id, "skipped", {
+        targetPath: file.path,
+        errorMessage: "Superseded by a newer release revision"
+      });
+      return;
+    }
+  }
+
+  const libraryExists = libraryFileExistsAtPath(subscription.id, finalPath);
+  const existingRevision = libraryExists
+    ? getLibraryFileRevisionAtPath(subscription.id, finalPath)
+    : null;
+  const overwriteDecision = canOverwriteLibraryFile({
+    claimedRevision,
+    existingRevision,
+    replaceExistingOnRevision: settings.replaceExistingOnRevision,
+    libraryFileExists: libraryExists
+  });
+  if (!overwriteDecision.allow) {
+    if (match.job) {
+      updateJobStatus(match.job.id, "skipped", {
+        targetPath: file.path,
+        errorMessage: overwriteDecision.reason
+      });
+    }
+    console.log(
+      `[pipeline] skip overwrite ${file.name}: ${overwriteDecision.reason}`
+    );
+    return;
+  }
+
+  // Overwrite only when policy allows: higher/equal revision covering an older library file,
+  // or same-path replace for unknown revision (different group / re-download).
+  const shouldReplaceExisting =
+    libraryExists && settings.replaceExistingOnRevision && overwriteDecision.allow;
 
   try {
     if (match.job) {
@@ -573,7 +679,7 @@ async function renameIncomingFile(
       markCompletedJob(
         subscription,
         parsed.episodeNumber,
-        parsed.releaseRevision,
+        claimedRevision,
         finalPath
       );
     }
@@ -702,6 +808,12 @@ function findTrackedJobMatch(
     subscriptions.map((subscription) => [subscription.id, subscription])
   );
 
+  const candidates: Array<{
+    subscription: Subscription;
+    job: DownloadJob;
+    metadata: ReleaseMetadata;
+  }> = [];
+
   for (const job of listJobsByStatus(["downloading", "ready_to_rename"])) {
     const subscription = subscriptionById.get(job.subscriptionId);
     if (!subscription) continue;
@@ -713,18 +825,29 @@ function findTrackedJobMatch(
     const metadata = getMetadataForFeedItem(job.feedItemId);
     if (!feedItem || !metadata) continue;
     if (metadata.episodeNumber !== parsed.episodeNumber) continue;
-    if (metadata.releaseRevision !== parsed.releaseRevision) continue;
+    // Do not require exact releaseRevision: torrent/file names often omit "v2"
+    // while the RSS title carried it.
 
     const decision = evaluateRules(feedItem.title, metadata, listRules(subscription.id));
     if (!decision.allowed) continue;
 
-    return {
-      subscription,
-      job
-    };
+    candidates.push({ subscription, job, metadata });
   }
 
-  return null;
+  if (candidates.length === 0) return null;
+
+  candidates.sort((left, right) => {
+    const leftExact = left.metadata.releaseRevision === parsed.releaseRevision ? 1 : 0;
+    const rightExact = right.metadata.releaseRevision === parsed.releaseRevision ? 1 : 0;
+    if (leftExact !== rightExact) return rightExact - leftExact;
+    return (
+      right.metadata.releaseRevision - left.metadata.releaseRevision ||
+      right.job.id - left.job.id
+    );
+  });
+
+  const best = candidates[0];
+  return { subscription: best.subscription, job: best.job };
 }
 
 function findSubscriptionByFilenameRules(
@@ -756,23 +879,27 @@ function markCompletedJob(
   releaseRevision: number,
   finalPath: string
 ) {
+  // Prefer exact revision, then highest revision with an in-flight job.
+  // Filename often lacks "v2" even when the RSS metadata had it.
+  const inFlight = new Set(["discovered", "queued", "downloading", "ready_to_rename"]);
   const metadata = findMetadataBySubscription(subscription.id)
-    .filter(
-      (item) =>
-        item.episodeNumber === episodeNumber &&
-        item.releaseRevision === releaseRevision
-    )
-    .sort(
-      (left, right) =>
-        right.releaseRevision - left.releaseRevision ||
-        right.feedItemId - left.feedItemId
-    )[0];
-  if (!metadata) return;
-  const feedItem = getFeedItem(metadata.feedItemId);
-  if (!feedItem) return;
-  const job = getJobForItem(feedItem.id);
-  if (!job) return;
-  updateJobStatus(job.id, "completed", {
+    .filter((item) => item.episodeNumber === episodeNumber)
+    .map((item) => {
+      const job = getJobForItem(item.feedItemId);
+      return { item, job };
+    })
+    .filter((entry) => entry.job && inFlight.has(entry.job.status))
+    .sort((left, right) => {
+      const leftExact = left.item.releaseRevision === releaseRevision ? 1 : 0;
+      const rightExact = right.item.releaseRevision === releaseRevision ? 1 : 0;
+      if (leftExact !== rightExact) return rightExact - leftExact;
+      return (
+        right.item.releaseRevision - left.item.releaseRevision ||
+        right.item.feedItemId - left.item.feedItemId
+      );
+    })[0];
+  if (!metadata?.job) return;
+  updateJobStatus(metadata.job.id, "completed", {
     targetPath: finalPath,
     errorMessage: null
   });
@@ -782,9 +909,30 @@ function getJobForItem(feedItemId: number) {
   return getJobForFeedItem(feedItemId);
 }
 
+function supersedeSiblingRevisionJobs(
+  subscriptionId: number,
+  preferredFeedItemId: number,
+  metadata: Pick<
+    ReleaseMetadata,
+    "episodeNumber" | "releaseGroup" | "resolution" | "subtitleLanguage"
+  >
+) {
+  for (const feedItemId of listVariantFeedItemIds(subscriptionId, metadata)) {
+    if (feedItemId === preferredFeedItemId) continue;
+    markSupersededJob(feedItemId);
+  }
+}
+
 function markSupersededJob(feedItemId: number) {
   const job = getJobForItem(feedItemId);
-  if (!job || !["discovered", "queued", "needs_review"].includes(job.status)) {
+  // Also drop in-flight downloads for older revisions so a later v2 rename
+  // is not raced by the superseded job completing.
+  if (
+    !job ||
+    !["discovered", "queued", "needs_review", "downloading", "ready_to_rename"].includes(
+      job.status
+    )
+  ) {
     return;
   }
   updateJobStatus(job.id, "skipped", {

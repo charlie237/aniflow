@@ -504,9 +504,36 @@ export function getMetadataForFeedItem(feedItemId: number) {
   return mapMetadata(row as unknown as Record<string, unknown> | undefined);
 }
 
+const VARIANT_MATCH_SQL = `
+  f.subscription_id = @subscriptionId
+  AND m.episode_number = @episodeNumber
+  AND lower(trim(COALESCE(m.release_group, ''))) = lower(trim(COALESCE(@releaseGroup, '')))
+  AND lower(trim(COALESCE(m.resolution, ''))) = lower(trim(COALESCE(@resolution, '')))
+  AND lower(trim(COALESCE(m.subtitle_language, ''))) = lower(trim(COALESCE(@subtitleLanguage, '')))
+`;
+
+function variantMatchParams(
+  subscriptionId: number,
+  metadata: Pick<
+    ReleaseMetadata,
+    "episodeNumber" | "releaseGroup" | "resolution" | "subtitleLanguage"
+  >
+) {
+  return {
+    subscriptionId,
+    episodeNumber: metadata.episodeNumber,
+    releaseGroup: metadata.releaseGroup,
+    resolution: metadata.resolution,
+    subtitleLanguage: metadata.subtitleLanguage
+  };
+}
+
 export function getPreferredFeedItemIdForRelease(
   subscriptionId: number,
-  metadata: ReleaseMetadata
+  metadata: Pick<
+    ReleaseMetadata,
+    "episodeNumber" | "releaseGroup" | "resolution" | "subtitleLanguage"
+  >
 ) {
   if (metadata.episodeNumber == null) return null;
   const row = getSqlite()
@@ -514,25 +541,103 @@ export function getPreferredFeedItemIdForRelease(
       `SELECT f.id
        FROM feed_items f
        JOIN release_metadata m ON m.feed_item_id = f.id
-       WHERE f.subscription_id = @subscriptionId
-         AND m.episode_number = @episodeNumber
-         AND COALESCE(m.release_group, '') = COALESCE(@releaseGroup, '')
-         AND COALESCE(m.resolution, '') = COALESCE(@resolution, '')
-         AND COALESCE(m.subtitle_language, '') = COALESCE(@subtitleLanguage, '')
+       WHERE ${VARIANT_MATCH_SQL}
        ORDER BY m.release_revision DESC,
          datetime(COALESCE(f.published_at, f.first_seen_at)) DESC,
          f.id DESC
        LIMIT 1`
     )
-    .get({
-      subscriptionId,
-      episodeNumber: metadata.episodeNumber,
-      releaseGroup: metadata.releaseGroup,
-      resolution: metadata.resolution,
-      subtitleLanguage: metadata.subtitleLanguage
-    }) as { id: number } | undefined;
+    .get(variantMatchParams(subscriptionId, metadata)) as { id: number } | undefined;
 
   return row?.id ?? null;
+}
+
+/** All feed item ids that share the same release variant facets (any revision). */
+export function listVariantFeedItemIds(
+  subscriptionId: number,
+  metadata: Pick<
+    ReleaseMetadata,
+    "episodeNumber" | "releaseGroup" | "resolution" | "subtitleLanguage"
+  >
+) {
+  if (metadata.episodeNumber == null) return [] as number[];
+  const rows = getSqlite()
+    .prepare(
+      `SELECT f.id
+       FROM feed_items f
+       JOIN release_metadata m ON m.feed_item_id = f.id
+       WHERE ${VARIANT_MATCH_SQL}
+       ORDER BY m.release_revision DESC,
+         datetime(COALESCE(f.published_at, f.first_seen_at)) DESC,
+         f.id DESC`
+    )
+    .all(variantMatchParams(subscriptionId, metadata)) as Array<{ id: number }>;
+  return rows.map((row) => row.id);
+}
+
+/** Highest release_revision among feed items of the same variant facets. */
+export function getHighestReleaseRevisionForVariant(
+  subscriptionId: number,
+  metadata: Pick<
+    ReleaseMetadata,
+    "episodeNumber" | "releaseGroup" | "resolution" | "subtitleLanguage"
+  >
+) {
+  if (metadata.episodeNumber == null) return 1;
+  const row = getSqlite()
+    .prepare(
+      `SELECT MAX(m.release_revision) AS highest
+       FROM feed_items f
+       JOIN release_metadata m ON m.feed_item_id = f.id
+       WHERE ${VARIANT_MATCH_SQL}`
+    )
+    .get(variantMatchParams(subscriptionId, metadata)) as
+    | { highest: number | null }
+    | undefined;
+  const highest = Number(row?.highest ?? 1);
+  return Number.isFinite(highest) && highest > 1 ? highest : 1;
+}
+
+/**
+ * Revision of the latest renamed library file at finalPath for this subscription,
+ * via linked feed_item metadata when available.
+ */
+export function getLibraryFileRevisionAtPath(
+  subscriptionId: number,
+  finalPath: string
+) {
+  const row = getSqlite()
+    .prepare(
+      `SELECT m.release_revision AS release_revision
+       FROM episode_files ef
+       LEFT JOIN release_metadata m ON m.feed_item_id = ef.feed_item_id
+       WHERE ef.subscription_id = @subscriptionId
+         AND ef.final_path = @finalPath
+         AND ef.status = 'renamed'
+       ORDER BY datetime(ef.updated_at) DESC, ef.id DESC
+       LIMIT 1`
+    )
+    .get({ subscriptionId, finalPath }) as
+    | { release_revision: number | null }
+    | undefined;
+  if (!row) return null;
+  if (row.release_revision == null) return null;
+  const revision = Number(row.release_revision);
+  return Number.isFinite(revision) && revision > 0 ? revision : null;
+}
+
+export function libraryFileExistsAtPath(subscriptionId: number, finalPath: string) {
+  const row = getSqlite()
+    .prepare(
+      `SELECT 1 AS ok
+       FROM episode_files
+       WHERE subscription_id = @subscriptionId
+         AND final_path = @finalPath
+         AND status = 'renamed'
+       LIMIT 1`
+    )
+    .get({ subscriptionId, finalPath }) as { ok: number } | undefined;
+  return Boolean(row);
 }
 
 export function getJobForFeedItem(feedItemId: number) {

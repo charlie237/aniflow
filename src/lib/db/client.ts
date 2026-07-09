@@ -229,11 +229,26 @@ function backfillReleaseRevisions(database: Database.Database) {
 }
 
 function inferReleaseRevisionFromTitle(title: string) {
-  const revision = Number.parseInt(
-    title.match(/\b(?:S\d{1,2}E|EP\s*)?\d{1,3}\s*v(\d{1,2})\b/i)?.[1] ?? "",
-    10
+  // Keep bootstrap free of app-module imports (client loads early). Mirror title-parser coverage.
+  const candidates: number[] = [];
+  const push = (raw: string | undefined) => {
+    if (!raw) return;
+    const revision = Number.parseInt(raw.match(/v\s*(\d{1,2})/i)?.[1] ?? raw, 10);
+    if (Number.isFinite(revision) && revision > 1) candidates.push(revision);
+  };
+  push(title.match(/[\[【(（]\s*v\s*(\d{1,2})\s*[\]】)）]/i)?.[1]);
+  push(title.match(/\bS\d{1,2}E\d{1,3}\s*[._\-]?\s*v\s*(\d{1,2})\b/i)?.[1]);
+  push(title.match(/(?:^|[^A-Za-z0-9])(?:EP|E)\s*\d{1,3}\s*[._\-]?\s*v\s*(\d{1,2})\b/i)?.[1]);
+  push(title.match(/第\s*\d{1,3}\s*(?:话|話|集|夜|回)\s*[._\-]?\s*v\s*(\d{1,2})\b/i)?.[1]);
+  push(
+    title.match(
+      /(?:^|[^A-Za-z0-9])\d{1,3}\s*[._\-]?\s*v\s*(\d{1,2})\b/i
+    )?.[1]
   );
-  return Number.isFinite(revision) && revision > 1 ? revision : 1;
+  if (candidates.length === 0) {
+    push(title.match(/(?:^|[\s_\-])v\s*(\d{1,2})\b(?![\w-])/i)?.[1]);
+  }
+  return candidates.length > 0 ? Math.max(...candidates) : 1;
 }
 
 function ensureColumn(

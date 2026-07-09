@@ -139,9 +139,10 @@ export function SettingsForm({
                 defaultChecked={settings.replaceExistingOnRevision}
               />
               <span>
-                <span className="block font-medium">同路径覆盖</span>
+                <span className="block font-medium">修正版覆盖（默认开启）</span>
                 <span className="mt-1 block text-xs leading-5 text-[var(--muted)]">
-                  整理到媒体库时，若最终路径已存在同名文件（v2/v3 修正版、重下、或不同字幕组落到同一模板路径），则覆盖旧文件。
+                  同变体出现 v2/v3 时直接下最新版；入库时允许更高修正版覆盖库内旧文件，并阻止更低版本盖回。
+                  同路径的重下/不同组互盖也受此开关控制。
                 </span>
               </span>
             </label>

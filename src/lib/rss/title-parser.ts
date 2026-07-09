@@ -36,11 +36,13 @@ const SEASON_PATTERNS = [
   /(?:^|[\s/：:~～-])(?<season>ⅰ|ⅱ|ⅲ|ⅳ|ⅴ|Ⅰ|Ⅱ|Ⅲ|Ⅳ|Ⅴ|I|II|III|IV|V)(?=$|[\s/：:~～-])/i
 ];
 const EPISODE_PATTERNS = [
-  /\bS\d{1,2}E(?<ep>\d{1,3})(?:\b|v\d)/i,
-  /第\s*(?<ep>\d{1,3})\s*(?:话|話|集|夜|回)/,
-  /[\[【(（]\s*(?<ep>\d{1,3})(?:\s*v\d)?\s*[\]】)）]/i,
-  /(?:^|[\s_\-\[【(（])(?<ep>\d{1,3})(?:\s*(?:v\d|END|完)?)(?:[\s_\-\]】)）]|$)/i,
-  /(?:EP|E)\s*(?<ep>\d{1,3})(?:\b|v\d)/i
+  // Allow S01E04, S01E04v2, S01E04.v2, S01E04_v2
+  /\bS\d{1,2}E(?<ep>\d{1,3})(?:\s*[._\-]?\s*v\d{1,2}\b|(?=$|[^A-Za-z0-9]))/i,
+  // 第04话 / 第04话v2 / 第04话 v2
+  /第\s*(?<ep>\d{1,3})\s*(?:话|話|集|夜|回)(?:\s*v\d{1,2}\b)?/i,
+  /[\[【(（]\s*(?<ep>\d{1,3})(?:\s*v\d{1,2})?\s*[\]】)）]/i,
+  /(?:^|[\s_\-\[【(（])(?<ep>\d{1,3})(?:\s*(?:v\d{1,2}|END|完)?)(?:[\s_\-\]】)）]|$)/i,
+  /(?:EP|E)\s*(?<ep>\d{1,3})(?:\s*[._\-]?\s*v\d{1,2}\b|(?=$|[^A-Za-z0-9]))/i
 ];
 
 export function parseReleaseTitle(title: string): ParsedReleaseTitle {
@@ -144,15 +146,73 @@ function inferEpisode(title: string) {
       return {
         episodeNumber: number,
         episodeText: value.padStart(2, "0"),
-        releaseRevision: inferReleaseRevision(match?.[0] ?? "")
+        releaseRevision: inferReleaseRevisionFromTitle(title, {
+          episodeNumber: number,
+          episodeMatch: match?.[0] ?? ""
+        })
       };
     }
   }
   return { episodeNumber: null, episodeText: null, releaseRevision: 1 };
 }
 
-function inferReleaseRevision(value: string) {
-  const revision = Number.parseInt(value.match(/v\s*(\d{1,2})/i)?.[1] ?? "", 10);
+/**
+ * Resolve release revision (v2/v3/…) from a full title.
+ * Accepts markers attached to the episode, standalone tags like [v2], and dotted forms (S01E04.v2).
+ */
+export function inferReleaseRevisionFromTitle(
+  title: string,
+  context?: { episodeNumber?: number | null; episodeMatch?: string }
+) {
+  const candidates: number[] = [];
+
+  /** Text that may contain a "vN" marker (e.g. episode match "04v2"). */
+  const pushMarked = (value: string | undefined) => {
+    const revision = parseRevisionNumber(value?.match(/v\s*(\d{1,2})/i)?.[1]);
+    if (revision > 1) candidates.push(revision);
+  };
+
+  /** Capture group that is already just the revision digits. */
+  const pushDigits = (value: string | undefined) => {
+    const revision = parseRevisionNumber(value);
+    if (revision > 1) candidates.push(revision);
+  };
+
+  pushMarked(context?.episodeMatch);
+  pushDigits(title.match(/[\[【(（]\s*v\s*(\d{1,2})\s*[\]】)）]/i)?.[1]);
+  pushDigits(title.match(/\bS\d{1,2}E\d{1,3}\s*[._\-]?\s*v\s*(\d{1,2})\b/i)?.[1]);
+  pushDigits(
+    title.match(/(?:^|[^A-Za-z0-9])(?:EP|E)\s*\d{1,3}\s*[._\-]?\s*v\s*(\d{1,2})\b/i)?.[1]
+  );
+  pushDigits(
+    title.match(/第\s*\d{1,3}\s*(?:话|話|集|夜|回)\s*[._\-]?\s*v\s*(\d{1,2})\b/i)?.[1]
+  );
+
+  const episodeNumber = context?.episodeNumber;
+  if (episodeNumber != null && Number.isFinite(episodeNumber)) {
+    const ep = String(episodeNumber);
+    const epPad = ep.padStart(2, "0");
+    // 04v2 / 04.v2 / 04_v2 / 04 v2 — require non-alnum boundary before the number
+    const adjacent = title.match(
+      new RegExp(
+        `(?:^|[^A-Za-z0-9])(?:0?${ep}|${epPad})\\s*[._\\-]?\\s*v\\s*(\\d{1,2})\\b`,
+        "i"
+      )
+    );
+    pushDigits(adjacent?.[1]);
+  }
+
+  // Loose " v2 " / trailing marker when nothing more specific matched.
+  if (candidates.length === 0) {
+    pushDigits(title.match(/(?:^|[\s_\-\[【(（])v\s*(\d{1,2})\b/i)?.[1]);
+  }
+
+  return candidates.length > 0 ? Math.max(...candidates) : 1;
+}
+
+function parseRevisionNumber(value: string | undefined) {
+  if (!value) return 1;
+  const revision = Number.parseInt(value.trim(), 10);
   return Number.isFinite(revision) && revision > 1 ? revision : 1;
 }
 
