@@ -9,9 +9,12 @@ process.env.DATABASE_PATH = dbPath;
 
 const { getSqlite } = await import("@/lib/db/client");
 const {
+  acquireWorkerLease,
   enqueueWorkerTask,
   failWorkerTask,
   getWorkerTask,
+  refreshWorkerLease,
+  releaseWorkerLease,
   requeueFailedWorkerTasks
 } = await import("@/lib/db/repositories");
 
@@ -22,6 +25,7 @@ describe("requeueFailedWorkerTasks", () => {
 
   beforeEach(() => {
     getSqlite().exec("DELETE FROM worker_tasks");
+    getSqlite().exec("DELETE FROM settings WHERE key LIKE 'workerLease:%'");
   });
 
   afterAll(() => {
@@ -97,5 +101,17 @@ describe("requeueFailedWorkerTasks", () => {
 
     expect(requeueFailedWorkerTasks(3, 60)).toBe(0);
     expect(getWorkerTask(failed.id)?.status).toBe("failed");
+  });
+
+  it("allows only one process to hold an incoming mutation lease", () => {
+    expect(acquireWorkerLease("incoming-mutation", "owner-a", 3600)).toBe(true);
+    expect(acquireWorkerLease("incoming-mutation", "owner-b", 3600)).toBe(false);
+    expect(refreshWorkerLease("incoming-mutation", "owner-b")).toBe(false);
+
+    releaseWorkerLease("incoming-mutation", "owner-b");
+    expect(acquireWorkerLease("incoming-mutation", "owner-b", 3600)).toBe(false);
+
+    releaseWorkerLease("incoming-mutation", "owner-a");
+    expect(acquireWorkerLease("incoming-mutation", "owner-b", 3600)).toBe(true);
   });
 });

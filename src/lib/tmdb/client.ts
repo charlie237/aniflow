@@ -20,6 +20,7 @@ export async function getTmdbSeries(seriesId: number) {
         Authorization: `Bearer ${settings.tmdbBearerToken}`,
         Accept: "application/json"
       },
+      signal: AbortSignal.timeout(15_000),
       next: { revalidate: 60 * 60 * 12 }
     }
   );

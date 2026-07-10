@@ -36,6 +36,7 @@ import {
 import { toBool } from "@/lib/utils";
 import {
   buildSubscriptionIncomingPath,
+  isRemotePathWithin,
   joinRemotePath,
   resolveSubscriptionIncomingPath
 } from "@/lib/utils/path";
@@ -622,6 +623,10 @@ function resolveSubscriptionIncomingPathInput(params: {
   if (!explicit) return autoForName;
 
   const explicitPath = joinRemotePath(explicit);
+
+  if (!isRemotePathWithin(explicitPath, root)) {
+    throw new Error(`订阅下载目录必须位于全局下载根目录 ${root} 内`);
+  }
 
   // Legacy create sent the shared root as the default path.
   if (explicitPath === root) return autoForName;

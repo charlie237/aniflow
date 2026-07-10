@@ -28,6 +28,7 @@ export interface OpenList115CheckResult {
 }
 
 const DEFAULT_DELETE_POLICY = "delete_never";
+const OPENLIST_REQUEST_TIMEOUT_MS = 30_000;
 
 export async function add115OfflineDownload(params: {
   urls: string[];
@@ -319,6 +320,7 @@ async function openListFetch<TData = unknown>(
 
   const response = await fetch(`${settings.openlistBaseUrl}${endpoint}`, {
     ...init,
+    signal: AbortSignal.timeout(OPENLIST_REQUEST_TIMEOUT_MS),
     headers: {
       "Content-Type": "application/json",
       Authorization: settings.openlistToken,

@@ -365,6 +365,42 @@ export function touchWorkerHeartbeat() {
     .run();
 }
 
+export function acquireWorkerLease(
+  name: string,
+  owner: string,
+  staleAfterSeconds = 30 * 60
+) {
+  const key = `workerLease:${name}`;
+  const result = getSqlite()
+    .prepare(
+      `INSERT INTO settings (key, value, updated_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = CURRENT_TIMESTAMP
+       WHERE datetime(settings.updated_at) <= datetime('now', ?)`
+    )
+    .run(key, owner, `-${Math.max(60, staleAfterSeconds)} seconds`);
+  return result.changes > 0;
+}
+
+export function refreshWorkerLease(name: string, owner: string) {
+  return (
+    getSqlite()
+      .prepare(
+        `UPDATE settings SET updated_at = CURRENT_TIMESTAMP
+         WHERE key = ? AND value = ?`
+      )
+      .run(`workerLease:${name}`, owner).changes > 0
+  );
+}
+
+export function releaseWorkerLease(name: string, owner: string) {
+  getSqlite()
+    .prepare("DELETE FROM settings WHERE key = ? AND value = ?")
+    .run(`workerLease:${name}`, owner);
+}
+
 export function getWorkerHealth(): WorkerHealth {
   const systemSettings = getSystemSettings();
   const row = getDb()
@@ -793,6 +829,17 @@ export function claimQueuedJob(jobId: number) {
   return result.changes > 0;
 }
 
+export function touchDownloadingJobActivity(jobId: number) {
+  return (
+    getSqlite()
+      .prepare(
+        `UPDATE download_jobs SET updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND status = 'downloading'`
+      )
+      .run(jobId).changes > 0
+  );
+}
+
 export function failStaleDownloadingJobs(
   maxAgeSeconds?: number,
   errorMessage = "Download timed out waiting for OpenList / 115 completion"
@@ -842,6 +889,11 @@ export function requeueFailedDownloadJobs() {
        WHERE status = 'failed'
          AND source_url IS NOT NULL
          AND TRIM(source_url) != ''
+         AND EXISTS (
+           SELECT 1 FROM subscriptions subscription
+           WHERE subscription.id = download_jobs.subscription_id
+             AND subscription.enabled = 1
+         )
          AND attempts < ?
          AND attempts > 0
          AND datetime(updated_at) <= datetime('now', ?)

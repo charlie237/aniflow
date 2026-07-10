@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const tempDir = mkdtempSync(join(tmpdir(), "aniflow-dl-retry-"));
 const dbPath = join(tempDir, "dl-retry.sqlite");
@@ -19,6 +19,12 @@ const {
   getSystemSettings,
   upsertFeedItem
 } = await import("@/lib/db/repositories");
+const {
+  cleanupDeletedSubscriptionIncoming,
+  pollSubscription,
+  reconcileDownloadingJobs,
+  submitJob
+} = await import("@/lib/worker/pipeline");
 
 describe("requeueFailedDownloadJobs", () => {
   beforeAll(() => {
@@ -36,6 +42,8 @@ describe("requeueFailedDownloadJobs", () => {
     const current = getSystemSettings();
     saveSystemSettings({
       ...current,
+      openlistBaseUrl: "",
+      openlistToken: "",
       downloadAutoRetryEnabled: true,
       downloadAutoRetryMaxAttempts: 3,
       downloadAutoRetryCooldownMinutes: 10
@@ -165,6 +173,108 @@ describe("requeueFailedDownloadJobs", () => {
     expect(requeueFailedDownloadJobs()).toBe(0);
   });
 
+  it("does not requeue failed jobs for a disabled subscription", () => {
+    const sub = createSubscription({
+      name: "Paused Show",
+      rssUrl: "https://example.com/rss-paused",
+      enabled: false,
+      seasonNumber: 1,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+
+    const feed = upsertFeedItem(sub, {
+      guid: "paused-1",
+      title: "[G] Paused Show - 01 [1080p][CHS].mkv",
+      downloadUrl: "magnet:?xt=urn:btih:paused",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Paused Show",
+        episodeNumber: 1,
+        episodeText: "01",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 80,
+        needsReview: false
+      }
+    });
+    const job = createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: feed.id,
+      status: "failed",
+      sourceUrl: "magnet:?xt=urn:btih:paused",
+      errorMessage: "timeout"
+    });
+    if (!job) return;
+    getSqlite()
+      .prepare(
+        `UPDATE download_jobs SET attempts = 1,
+         updated_at = datetime('now', '-15 minutes') WHERE id = ?`
+      )
+      .run(job.id);
+
+    expect(requeueFailedDownloadJobs()).toBe(0);
+    expect(getJob(job.id)?.status).toBe("failed");
+  });
+
+  it("does not poll or submit new downloads while a subscription is disabled", async () => {
+    const sub = createSubscription({
+      name: "Disabled Show",
+      rssUrl: "https://example.com/rss-disabled",
+      enabled: false,
+      seasonNumber: 1,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      expect(await pollSubscription(sub.id)).toEqual({
+        fetched: 0,
+        discovered: 0,
+        queued: 0,
+        skipped: 0,
+        failed: 0
+      });
+
+      const feed = upsertFeedItem(sub, {
+        guid: "disabled-1",
+        title: "[G] Disabled Show - 01 [1080p][CHS].mkv",
+        downloadUrl: "magnet:?xt=urn:btih:disabled",
+        metadata: {
+          releaseGroup: "G",
+          parsedTitle: "Disabled Show",
+          episodeNumber: 1,
+          episodeText: "01",
+          releaseRevision: 1,
+          resolution: "1080p",
+          subtitleLanguage: "CHS",
+          container: "mkv",
+          tags: [],
+          parseConfidence: 80,
+          needsReview: false
+        }
+      });
+      const job = createOrUpdateJob({
+        subscriptionId: sub.id,
+        feedItemId: feed.id,
+        status: "queued",
+        sourceUrl: "magnet:?xt=urn:btih:disabled"
+      });
+      if (!job) return;
+
+      await submitJob(job);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(getJob(job.id)?.status).toBe("discovered");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("claims a queued job only once", () => {
     const sub = createSubscription({
       name: "Claim Show",
@@ -258,5 +368,103 @@ describe("requeueFailedDownloadJobs", () => {
     );
     expect(job?.status).toBe("failed");
     expect(job?.errorMessage).toMatch(/Rename timed out/i);
+  });
+
+  it("does not time out a download whose OpenList activity was just confirmed", async () => {
+    const sub = createSubscription({
+      name: "Active Download",
+      rssUrl: "https://example.com/rss-active-download",
+      seasonNumber: 1,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+
+    const feed = upsertFeedItem(sub, {
+      guid: "active-download-1",
+      title: "[G] Active Download - 01 [1080p][CHS].mkv",
+      downloadUrl: "magnet:?xt=urn:btih:active",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Active Download",
+        episodeNumber: 1,
+        episodeText: "01",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 80,
+        needsReview: false
+      }
+    });
+    const job = createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: feed.id,
+      status: "downloading",
+      sourceUrl: "magnet:?xt=urn:btih:active",
+      openlistTaskId: "active-task"
+    });
+    if (!job) return;
+    getSqlite()
+      .prepare(
+        "UPDATE download_jobs SET updated_at = datetime('now', '-2 hours') WHERE id = ?"
+      )
+      .run(job.id);
+
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      downloadTimeoutMinutes: 1
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => ({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        data: String(input).endsWith("/api/task/offline_download/undone")
+          ? [
+              {
+                id: "active-task",
+                name: "episode",
+                state: 1,
+                status: "running",
+                progress: 50,
+                error: ""
+              }
+            ]
+          : []
+      })
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      expect(await reconcileDownloadingJobs()).toEqual({ checked: 1, failed: 0 });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(getJob(job.id)?.status).toBe("downloading");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses deleted-subscription cleanup outside the global incoming root", async () => {
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming"
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(
+        cleanupDeletedSubscriptionIncoming({
+          subscriptionName: "Show",
+          incomingPath: "/115/Anime",
+          rules: []
+        })
+      ).rejects.toThrow(/outside the global incoming root/i);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

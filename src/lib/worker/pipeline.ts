@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   DownloadJob,
   FilterRule,
@@ -5,6 +6,7 @@ import type {
   Subscription
 } from "@/lib/db/types";
 import {
+  acquireWorkerLease,
   claimQueuedJob,
   createOrUpdateJob,
   failStaleDownloadingJobs,
@@ -22,9 +24,13 @@ import {
   listEnabledSubscriptions,
   listJobsByStatus,
   listRules,
+  listSubscriptions,
   listVariantFeedItemIds,
   markJobAttempt,
+  refreshWorkerLease,
+  releaseWorkerLease,
   requeueFailedDownloadJobs,
+  touchDownloadingJobActivity,
   touchSubscriptionPolled,
   updateJobStatus,
   upsertEpisodeFile,
@@ -57,6 +63,7 @@ import {
   getRemoteBaseName,
   getRemoteDirName,
   isMediaFile,
+  isRemotePathWithin,
   joinRemotePath,
   resolveSubscriptionIncomingPath
 } from "@/lib/utils/path";
@@ -87,6 +94,9 @@ export interface DeletedSubscriptionIncomingCleanup {
   incomingPath: string;
   rules: Array<Pick<FilterRule, "type" | "value" | "enabled">>;
 }
+
+const INCOMING_MUTATION_LEASE = "incoming-mutation";
+const INCOMING_MUTATION_LEASE_SECONDS = 2 * 60 * 60;
 
 export async function pollAllSubscriptions() {
   const totals: PipelineResult = {
@@ -151,6 +161,8 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
     skipped: 0,
     failed: 0
   };
+
+  if (!subscription.enabled) return result;
 
   const response = await fetchText(subscription.rssUrl, {
     headers: {
@@ -337,7 +349,8 @@ export async function reconcileDownloadingJobs() {
         continue;
       }
       if (activeIds.has(taskId)) {
-        // Still running (download or transfer) — leave as downloading.
+        // Keep the timeout clock tied to the last confirmed OpenList activity.
+        touchDownloadingJobActivity(job.id);
         continue;
       }
       // Task not in active lists: either succeeded and was purged (115), or vanished.
@@ -398,6 +411,12 @@ export async function submitJob(job: DownloadJob) {
   if (!subscription) {
     updateJobStatus(job.id, "failed", {
       errorMessage: "Subscription no longer exists"
+    });
+    return;
+  }
+  if (!subscription.enabled) {
+    updateJobStatus(job.id, "discovered", {
+      errorMessage: "Subscription is disabled; download submission paused"
     });
     return;
   }
@@ -490,22 +509,50 @@ export async function scanAndRenameIncoming() {
     return;
   }
 
-  const subscriptions = listEnabledSubscriptions();
-  const incomingPaths = uniquePaths([
-    settings.openlistIncomingPath,
-    ...subscriptions.map((subscription) => incomingPathForSubscription(subscription))
-  ]);
-  const seen = new Set<string>();
+  const leaseOwner = randomUUID();
+  if (
+    !acquireWorkerLease(
+      INCOMING_MUTATION_LEASE,
+      leaseOwner,
+      INCOMING_MUTATION_LEASE_SECONDS
+    )
+  ) {
+    console.log("[pipeline] incoming scan skipped; another process holds the lease");
+    return;
+  }
 
-  for (const incomingPath of incomingPaths) {
-    await ensureOpenListDirectory(incomingPath);
-    const files = await listIncomingMediaFiles(incomingPath);
-    for (const file of files) {
-      if (seen.has(file.path)) continue;
-      seen.add(file.path);
-      await renameIncomingFile(file, subscriptions);
+  try {
+    const subscriptions = listSubscriptions();
+    const subscriptionPaths = subscriptions.flatMap((subscription) => {
+      try {
+        return [incomingPathForSubscription(subscription)];
+      } catch (error) {
+        console.error(
+          `[pipeline] unsafe incoming path for subscription#${subscription.id}: ${errorMessage(error)}`
+        );
+        return [];
+      }
+    });
+    const incomingPaths = uniquePaths([
+      settings.openlistIncomingPath,
+      ...subscriptionPaths
+    ]);
+    const seen = new Set<string>();
+
+    for (const incomingPath of incomingPaths) {
+      assertIncomingMutationLease(leaseOwner);
+      await ensureOpenListDirectory(incomingPath);
+      const files = await listIncomingMediaFiles(incomingPath);
+      for (const file of files) {
+        if (seen.has(file.path)) continue;
+        seen.add(file.path);
+        await renameIncomingFile(file, subscriptions);
+        assertIncomingMutationLease(leaseOwner);
+      }
+      await cleanupEmptyIncomingDirectories(incomingPath);
     }
-    await cleanupEmptyIncomingDirectories(incomingPath);
+  } finally {
+    releaseWorkerLease(INCOMING_MUTATION_LEASE, leaseOwner);
   }
 }
 
@@ -516,36 +563,58 @@ export async function cleanupDeletedSubscriptionIncoming(
   if (!settings.openlistBaseUrl || !settings.openlistToken) return { removed: 0 };
 
   const incomingPath = joinRemotePath(payload.incomingPath);
-  const files = await listIncomingMediaFiles(incomingPath);
-  const rules = payload.rules.map((rule, index): FilterRule => ({
-    id: index + 1,
-    subscriptionId: 0,
-    type: rule.type,
-    value: rule.value,
-    enabled: rule.enabled,
-    createdAt: ""
-  }));
-  let removed = 0;
-
-  for (const file of files) {
-    const parsed = parseReleaseTitle(file.name);
-    if (!matchesDeletedSubscription(payload.subscriptionName, file.name, parsed)) {
-      continue;
-    }
-    if (rules.length > 0 && !evaluateRules(file.name, parsed, rules).allowed) {
-      continue;
-    }
-
-    await removeOpenListFiles({
-      dir: getRemoteDirName(file.path),
-      names: [getRemoteBaseName(file.path)]
-    });
-    removed += 1;
-    await cleanupEmptyDirectory(getRemoteDirName(file.path), incomingPath);
+  if (!isRemotePathWithin(incomingPath, settings.openlistIncomingPath)) {
+    throw new Error(
+      `Refusing to clean outside the global incoming root: ${incomingPath}`
+    );
   }
 
-  await cleanupEmptyIncomingDirectories(incomingPath);
-  return { removed };
+  const leaseOwner = randomUUID();
+  if (
+    !acquireWorkerLease(
+      INCOMING_MUTATION_LEASE,
+      leaseOwner,
+      INCOMING_MUTATION_LEASE_SECONDS
+    )
+  ) {
+    throw new Error("Incoming file operations are busy; cleanup will retry");
+  }
+
+  try {
+    const files = await listIncomingMediaFiles(incomingPath);
+    const rules = payload.rules.map((rule, index): FilterRule => ({
+      id: index + 1,
+      subscriptionId: 0,
+      type: rule.type,
+      value: rule.value,
+      enabled: rule.enabled,
+      createdAt: ""
+    }));
+    let removed = 0;
+
+    for (const file of files) {
+      assertIncomingMutationLease(leaseOwner);
+      const parsed = parseReleaseTitle(file.name);
+      if (!matchesDeletedSubscription(payload.subscriptionName, file.name, parsed)) {
+        continue;
+      }
+      if (rules.length > 0 && !evaluateRules(file.name, parsed, rules).allowed) {
+        continue;
+      }
+
+      await removeOpenListFiles({
+        dir: getRemoteDirName(file.path),
+        names: [getRemoteBaseName(file.path)]
+      });
+      removed += 1;
+      await cleanupEmptyDirectory(getRemoteDirName(file.path), incomingPath);
+    }
+
+    await cleanupEmptyIncomingDirectories(incomingPath);
+    return { removed };
+  } finally {
+    releaseWorkerLease(INCOMING_MUTATION_LEASE, leaseOwner);
+  }
 }
 
 async function renameIncomingFile(
@@ -754,7 +823,7 @@ function matchesDeletedSubscription(
 
 async function cleanupEmptyIncomingDirectories(root: string) {
   const hasActiveJob = listJobsByStatus(["queued", "downloading", "ready_to_rename"])
-    .some((job) => job.targetPath && isPathWithin(job.targetPath, root));
+    .some((job) => job.targetPath && isRemotePathWithin(job.targetPath, root));
   if (hasActiveJob) return;
 
   await cleanupEmptyChildDirectories(root, root);
@@ -781,7 +850,10 @@ async function cleanupEmptyChildDirectories(path: string, root: string) {
 async function cleanupEmptyDirectory(path: string, root: string) {
   const normalizedPath = joinRemotePath(path);
   const normalizedRoot = joinRemotePath(root);
-  if (normalizedPath === normalizedRoot || !isPathWithin(normalizedPath, normalizedRoot)) {
+  if (
+    normalizedPath === normalizedRoot ||
+    !isRemotePathWithin(normalizedPath, normalizedRoot)
+  ) {
     return;
   }
 
@@ -824,7 +896,11 @@ function findIncomingMatch(
   const tracked = findTrackedJobMatch(subscriptions, filePath, parsed);
   if (tracked) return tracked;
 
-  const subscription = findSubscriptionByFilenameRules(subscriptions, filename, parsed);
+  const subscription = findSubscriptionByFilenameRules(
+    subscriptions.filter((item) => item.enabled),
+    filename,
+    parsed
+  );
   return subscription ? { subscription, job: null } : null;
 }
 
@@ -850,7 +926,13 @@ function findTrackedJobMatch(
   for (const job of listJobsByStatus(["downloading", "ready_to_rename"])) {
     const subscription = subscriptionById.get(job.subscriptionId);
     if (!subscription) continue;
-    if (!isPathWithin(filePath, job.targetPath ?? incomingPathForSubscription(subscription))) {
+    let jobRoot: string;
+    try {
+      jobRoot = job.targetPath ?? incomingPathForSubscription(subscription);
+    } catch {
+      continue;
+    }
+    if (!isRemotePathWithin(filePath, jobRoot)) {
       continue;
     }
 
@@ -922,10 +1004,14 @@ function findSubscriptionByFilenameRules(
   return pickBestIncomingSubscriptionMatch(candidates);
 }
 
-function isPathWithin(path: string, root: string) {
-  const normalizedPath = joinRemotePath(path);
-  const normalizedRoot = joinRemotePath(root);
-  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot}/`);
+function assertIncomingMutationLease(owner: string) {
+  if (!refreshWorkerLease(INCOMING_MUTATION_LEASE, owner)) {
+    throw new Error("Incoming mutation lease was lost");
+  }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function markCompletedJob(

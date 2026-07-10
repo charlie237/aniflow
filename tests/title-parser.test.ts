@@ -3,6 +3,8 @@ import { parseReleaseTitle } from "@/lib/rss/title-parser";
 import {
   buildEpisodePath,
   buildSubscriptionIncomingPath,
+  isRemotePathWithin,
+  joinRemotePath,
   resolveSubscriptionIncomingPath
 } from "@/lib/utils/path";
 
@@ -313,5 +315,38 @@ describe("subscription incoming path", () => {
         incomingPath: null
       })
     ).toBe("/115/Anime/_incoming/Show");
+  });
+
+  it("rejects explicit paths outside the global incoming root", () => {
+    expect(() =>
+      resolveSubscriptionIncomingPath({
+        incomingRoot: "/115/Anime/_incoming",
+        subscriptionName: "Show",
+        incomingPath: "/115/Anime"
+      })
+    ).toThrow(/global incoming root/i);
+    expect(() =>
+      resolveSubscriptionIncomingPath({
+        incomingRoot: "/115/Anime/_incoming",
+        subscriptionName: "Show",
+        incomingPath: "/115/Anime/_incoming/../library"
+      })
+    ).toThrow(/global incoming root/i);
+  });
+
+  it("normalizes dot segments before checking containment", () => {
+    expect(joinRemotePath("/115/Anime/_incoming/a/../b")).toBe(
+      "/115/Anime/_incoming/b"
+    );
+    expect(
+      isRemotePathWithin(
+        "/115/Anime/_incoming/a/../b",
+        "/115/Anime/_incoming"
+      )
+    ).toBe(true);
+    expect(isRemotePathWithin("/115/Anime", "/")).toBe(true);
+    expect(buildSubscriptionIncomingPath("/115/Anime/_incoming", "..")).toBe(
+      "/115/Anime/_incoming/unnamed"
+    );
   });
 });

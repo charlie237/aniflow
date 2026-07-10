@@ -10,21 +10,42 @@ const MEDIA_EXTENSIONS = new Set([
 ]);
 
 export function sanitizePathSegment(value: string) {
-  return value
+  const sanitized = value
     .replace(ILLEGAL_PATH_CHARS, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 160);
+  return sanitized === "." || sanitized === ".." ? "" : sanitized;
 }
 
 export function joinRemotePath(...parts: Array<string | null | undefined>) {
-  const joined = parts
+  const segments: string[] = [];
+  const rawSegments = parts
     .filter((part): part is string => Boolean(part))
     .flatMap((part) => part.split("/"))
     .map((part) => part.trim())
-    .filter(Boolean)
-    .join("/");
-  return `/${joined}`;
+    .filter(Boolean);
+
+  for (const segment of rawSegments) {
+    if (segment === ".") continue;
+    if (segment === "..") {
+      segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+
+  return `/${segments.join("/")}`;
+}
+
+export function isRemotePathWithin(path: string, root: string) {
+  const normalizedPath = joinRemotePath(path);
+  const normalizedRoot = joinRemotePath(root);
+  if (normalizedRoot === "/") return true;
+  return (
+    normalizedPath === normalizedRoot ||
+    normalizedPath.startsWith(`${normalizedRoot}/`)
+  );
 }
 
 /**
@@ -48,9 +69,18 @@ export function resolveSubscriptionIncomingPath(params: {
   subscriptionName: string;
   incomingPath?: string | null;
 }) {
+  const root = joinRemotePath(params.incomingRoot);
   const explicit = params.incomingPath?.trim();
-  if (explicit) return joinRemotePath(explicit);
-  return buildSubscriptionIncomingPath(params.incomingRoot, params.subscriptionName);
+  if (explicit) {
+    const normalized = joinRemotePath(explicit);
+    if (!isRemotePathWithin(normalized, root)) {
+      throw new Error(
+        `Subscription incoming path must stay within the global incoming root: ${root}`
+      );
+    }
+    return normalized;
+  }
+  return buildSubscriptionIncomingPath(root, params.subscriptionName);
 }
 
 export function getExtension(path: string) {

@@ -89,7 +89,9 @@ docker compose up --build
 ```
 
 The compose file starts separate `web` and `worker` services that share
-`./data/aniflow.sqlite`.
+`./data/aniflow.sqlite`. The web port binds to `127.0.0.1` by default. Keep it
+that way when running without `AUTH_PASSWORD`; use an authenticated reverse
+proxy or explicitly change the port binding when remote access is required.
 
 ## Naming
 

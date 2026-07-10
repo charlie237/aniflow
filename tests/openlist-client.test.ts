@@ -78,6 +78,7 @@ describe("OpenList client", () => {
     });
 
     expect(tasks[0]?.id).toBe("task-1");
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
     expect(fetchMock).toHaveBeenCalledWith(
       "http://openlist.local/api/fs/add_offline_download",
       expect.objectContaining({
@@ -205,4 +206,3 @@ describe("OpenList client", () => {
     ).toBe(false);
   });
 });
-
