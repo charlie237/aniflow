@@ -34,6 +34,7 @@ import {
   type OpenList115CheckResult
 } from "@/lib/openlist/client";
 import { toBool } from "@/lib/utils";
+import { isMikanDownloadUrl, isMikanRssUrl } from "@/lib/net/url-policy";
 import {
   buildSubscriptionIncomingPath,
   isRemotePathWithin,
@@ -41,10 +42,14 @@ import {
   resolveSubscriptionIncomingPath
 } from "@/lib/utils/path";
 
+const mikanRssUrlSchema = z.string().url().refine(isMikanRssUrl, {
+  message: "仅支持 mikanani.me/RSS/ 订阅链接"
+});
+
 const subscriptionSchema = z.object({
   id: z.coerce.number().optional(),
   name: z.string().min(1),
-  rssUrl: z.string().url(),
+  rssUrl: mikanRssUrlSchema,
   enabled: z.boolean(),
   autoDownload: z.boolean(),
   seasonNumber: z.coerce.number().int().min(0).max(99),
@@ -58,7 +63,7 @@ const subscriptionSchema = z.object({
 
 const parsedSubscriptionSchema = z.object({
   name: z.string().min(1),
-  rssUrl: z.string().url(),
+  rssUrl: mikanRssUrlSchema,
   releaseGroup: z.string().min(1),
   resolution: z.string().min(1),
   subtitleLanguage: z.string().min(1),
@@ -567,7 +572,7 @@ function coreRuleValue(
 }
 
 function isDownloadUrl(value: string) {
-  return value.startsWith("magnet:?") || /^https?:\/\/\S+$/i.test(value);
+  return value.startsWith("magnet:?") || isMikanDownloadUrl(value);
 }
 
 function shortHash(value: string) {

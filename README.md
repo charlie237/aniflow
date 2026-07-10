@@ -1,8 +1,8 @@
 # Aniflow
 
-Aniflow is a local RSS anime release tracker for OpenList download flows.
+Aniflow is a local Mikan RSS anime release tracker for OpenList download flows.
 
-It polls RSS feeds such as Mikan, parses release metadata like subtitle group,
+It polls Mikan RSS feeds, parses release metadata like subtitle group,
 resolution, subtitle language, source and codec, applies subscription rules, and
 submits matching torrent or magnet URLs to OpenList 115 offline download.
 Finished files are scanned and organized through OpenList filesystem APIs, then
@@ -35,8 +35,9 @@ npm run worker
 
 ### Access control (optional)
 
-Set `AUTH_PASSWORD` in `.env` to require login for the web UI and APIs. Leave it
-empty for open local access (default).
+Set `AUTH_PASSWORD` in `.env` to require login for the web UI and APIs. When it
+is empty, only loopback hosts such as `localhost` and `127.0.0.1` are accepted.
+LAN, reverse-proxy, and public access require a password.
 
 ```bash
 AUTH_PASSWORD=your-strong-password
@@ -76,7 +77,8 @@ used unless enabled.
 
 ## Subscription Flow
 
-Use the **订阅** page to parse an RSS URL first. After parsing, create a
+Use the **订阅** page to parse an HTTPS `mikanani.me/RSS/` URL first. Other RSS
+providers and torrent download hosts are rejected by the server. After parsing, create a
 subscription by selecting the detected title, subtitle group, resolution, and
 subtitle language from dropdowns. Selected group/resolution/language values are
 saved as allow rules for that subscription.

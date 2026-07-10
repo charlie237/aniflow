@@ -13,16 +13,21 @@ const {
   createOrUpdateJob,
   createSubscription,
   failStaleDownloadingJobs,
+  getEpisodeFileForFeedItem,
   getJob,
+  getSubscription,
   requeueFailedDownloadJobs,
   saveSystemSettings,
   getSystemSettings,
+  upsertEpisodeFile,
   upsertFeedItem
 } = await import("@/lib/db/repositories");
 const {
   cleanupDeletedSubscriptionIncoming,
+  pollAllSubscriptions,
   pollSubscription,
   reconcileDownloadingJobs,
+  scanAndRenameIncoming,
   submitJob
 } = await import("@/lib/worker/pipeline");
 
@@ -314,6 +319,21 @@ describe("requeueFailedDownloadJobs", () => {
     expect(claimQueuedJob(job.id)).toBe(true);
     expect(claimQueuedJob(job.id)).toBe(false);
     expect(getJob(job.id)?.status).toBe("downloading");
+    expect(getJob(job.id)?.attempts).toBe(1);
+
+    getSqlite()
+      .prepare(
+        "UPDATE download_jobs SET updated_at = datetime('now', '-2 hours') WHERE id = ?"
+      )
+      .run(job.id);
+    expect(failStaleDownloadingJobs(60)).toBe(1);
+    getSqlite()
+      .prepare(
+        "UPDATE download_jobs SET updated_at = datetime('now', '-15 minutes') WHERE id = ?"
+      )
+      .run(job.id);
+    expect(requeueFailedDownloadJobs()).toBe(1);
+    expect(getJob(job.id)?.status).toBe("queued");
   });
 
   it("fails stale ready_to_rename jobs", () => {
@@ -440,6 +460,272 @@ describe("requeueFailedDownloadJobs", () => {
       expect(await reconcileDownloadingJobs()).toEqual({ checked: 1, failed: 0 });
       expect(fetchMock).toHaveBeenCalledTimes(3);
       expect(getJob(job.id)?.status).toBe("downloading");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not time out a tracked download when OpenList task lists are unavailable", async () => {
+    const sub = createSubscription({
+      name: "Unavailable Task State",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=8101",
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+    const feed = upsertFeedItem(sub, {
+      guid: "unavailable-task-1",
+      title: "[G] Unavailable Task State - 01 [1080p][CHS].mkv",
+      downloadUrl: "magnet:?xt=urn:btih:unavailable",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Unavailable Task State",
+        episodeNumber: 1,
+        episodeText: "01",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 80,
+        needsReview: false
+      }
+    });
+    const job = createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: feed.id,
+      status: "downloading",
+      sourceUrl: "magnet:?xt=urn:btih:unavailable",
+      openlistTaskId: "remote-task"
+    });
+    if (!job) return;
+    getSqlite()
+      .prepare(
+        "UPDATE download_jobs SET attempts = 1, updated_at = datetime('now', '-2 hours') WHERE id = ?"
+      )
+      .run(job.id);
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      downloadTimeoutMinutes: 1
+    });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("OpenList offline")));
+    try {
+      expect(await reconcileDownloadingJobs()).toEqual({ checked: 1, failed: 0 });
+      expect(getJob(job.id)?.status).toBe("downloading");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("continues polling later subscriptions when one RSS feed fails", async () => {
+    createSubscription({
+      name: "A Broken Feed",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=8201",
+      destinationRoot: "/115/Anime"
+    });
+    const healthy = createSubscription({
+      name: "B Healthy Feed",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=8202",
+      destinationRoot: "/115/Anime"
+    });
+    if (!healthy) return;
+
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).includes("8201")) {
+        return new Response("bad gateway", { status: 502 });
+      }
+      return new Response("<rss><channel><title>Healthy</title></channel></rss>", {
+        status: 200,
+        headers: { "Content-Type": "application/xml" }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const result = await pollAllSubscriptions();
+      expect(result.failed).toBe(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(getSubscription(healthy.id)?.lastPolledAt).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("recovers a remote move completed before the SQLite status update", async () => {
+    const sub = createSubscription({
+      name: "Recover Show",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=8301",
+      destinationRoot: "/115/Anime",
+      incomingPath: "/115/Anime/_incoming/Recover Show"
+    });
+    if (!sub) return;
+    const feed = upsertFeedItem(sub, {
+      guid: "recover-1",
+      title: "[G] Recover Show - 01 [1080p][CHS].mkv",
+      downloadUrl: "magnet:?xt=urn:btih:recover",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Recover Show",
+        episodeNumber: 1,
+        episodeText: "01",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 80,
+        needsReview: false
+      }
+    });
+    const originalPath =
+      "/115/Anime/_incoming/Recover Show/[G] Recover Show - 01 [1080p][CHS].mkv";
+    const finalPath = "/115/Anime/Recover Show/Season 01/Recover Show - S01E01.mkv";
+    const job = createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: feed.id,
+      status: "ready_to_rename",
+      sourceUrl: "magnet:?xt=urn:btih:recover",
+      targetPath: originalPath
+    });
+    if (!job) return;
+    upsertEpisodeFile({
+      subscriptionId: sub.id,
+      feedItemId: feed.id,
+      episodeNumber: 1,
+      originalPath,
+      finalPath,
+      sizeBytes: 123,
+      status: "detected"
+    });
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming",
+      mediaLibraryRoot: "/115/Anime"
+    });
+
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const endpoint = String(input);
+      const body = init?.body ? JSON.parse(String(init.body)) as { path?: string } : {};
+      const isDestination =
+        endpoint.endsWith("/api/fs/list") &&
+        body.path === "/115/Anime/Recover Show/Season 01";
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 200,
+          data: isDestination
+            ? {
+                content: [
+                  {
+                    name: "Recover Show - S01E01.mkv",
+                    size: 456,
+                    is_dir: false
+                  }
+                ]
+              }
+            : { content: [] }
+        })
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await scanAndRenameIncoming();
+      expect(getJob(job.id)?.status).toBe("completed");
+      expect(getJob(job.id)?.targetPath).toBe(finalPath);
+      expect(getEpisodeFileForFeedItem(feed.id)?.status).toBe("renamed");
+      expect(getEpisodeFileForFeedItem(feed.id)?.sizeBytes).toBe(456);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("continues a move after the source was renamed before a worker restart", async () => {
+    const sub = createSubscription({
+      name: "Recover Rename",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=8302",
+      destinationRoot: "/115/Anime",
+      incomingPath: "/115/Anime/_incoming/Recover Rename"
+    });
+    if (!sub) return;
+    const feed = upsertFeedItem(sub, {
+      guid: "recover-rename-1",
+      title: "[G] Recover Rename - 01 [1080p][CHS].mkv",
+      downloadUrl: "magnet:?xt=urn:btih:recover-rename",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Recover Rename",
+        episodeNumber: 1,
+        episodeText: "01",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 80,
+        needsReview: false
+      }
+    });
+    const incomingDir = "/115/Anime/_incoming/Recover Rename";
+    const originalPath = `${incomingDir}/[G] Recover Rename - 01 [1080p][CHS].mkv`;
+    const finalPath = "/115/Anime/Recover Rename/Season 01/S01E01.mkv";
+    const job = createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: feed.id,
+      status: "ready_to_rename",
+      sourceUrl: "magnet:?xt=urn:btih:recover-rename",
+      targetPath: originalPath
+    });
+    if (!job) return;
+    upsertEpisodeFile({
+      subscriptionId: sub.id,
+      feedItemId: feed.id,
+      episodeNumber: 1,
+      originalPath,
+      finalPath,
+      sizeBytes: 123,
+      status: "detected"
+    });
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming",
+      mediaLibraryRoot: "/115/Anime",
+      episodeFileTemplate: "S{season_pad}E{episode_pad}.{ext}"
+    });
+
+    let moved = false;
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const endpoint = String(input);
+      const body = init?.body
+        ? (JSON.parse(String(init.body)) as { path?: string })
+        : {};
+      if (endpoint.endsWith("/api/fs/move")) moved = true;
+
+      let content: Array<{ name: string; size?: number; is_dir: boolean }> = [];
+      if (endpoint.endsWith("/api/fs/list") && !moved) {
+        if (body.path === "/115/Anime/_incoming") {
+          content = [{ name: "Recover Rename", is_dir: true }];
+        } else if (body.path === incomingDir) {
+          content = [{ name: "S01E01.mkv", size: 123, is_dir: false }];
+        }
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ code: 200, data: { content } })
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await scanAndRenameIncoming();
+      expect(moved).toBe(true);
+      expect(getJob(job.id)?.status).toBe("completed");
+      expect(getJob(job.id)?.targetPath).toBe(finalPath);
     } finally {
       vi.unstubAllGlobals();
     }

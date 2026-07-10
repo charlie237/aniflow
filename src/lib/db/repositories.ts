@@ -732,7 +732,11 @@ export function createOrUpdateJob(params: {
   return getJobForFeedItem(params.feedItemId);
 }
 
-export function markJobAttempt(jobId: number, fields: Partial<DownloadJob>) {
+export function markJobAttempt(
+  jobId: number,
+  fields: Partial<DownloadJob>,
+  options: { incrementAttempt?: boolean } = {}
+) {
   getDb()
     .update(downloadJobs)
     .set({
@@ -750,7 +754,10 @@ export function markJobAttempt(jobId: number, fields: Partial<DownloadJob>) {
         fields.errorMessage !== undefined
           ? fields.errorMessage
           : sql`${downloadJobs.errorMessage}`,
-      attempts: sql`${downloadJobs.attempts} + 1`,
+      attempts:
+        options.incrementAttempt === false
+          ? sql`${downloadJobs.attempts}`
+          : sql`${downloadJobs.attempts} + 1`,
       updatedAt: sql`CURRENT_TIMESTAMP`
     })
     .where(eq(downloadJobs.id, jobId))
@@ -817,6 +824,7 @@ export function claimQueuedJob(jobId: number) {
     .prepare(
       `UPDATE download_jobs SET
         status = 'downloading',
+        attempts = attempts + 1,
         error_message = CASE
           WHEN error_message IS NULL OR error_message = '' THEN 'Submitting offline download'
           ELSE error_message
@@ -842,11 +850,16 @@ export function touchDownloadingJobActivity(jobId: number) {
 
 export function failStaleDownloadingJobs(
   maxAgeSeconds?: number,
-  errorMessage = "Download timed out waiting for OpenList / 115 completion"
+  errorMessage = "Download timed out waiting for OpenList / 115 completion",
+  excludedJobIds: number[] = []
 ) {
   const ageSeconds =
     maxAgeSeconds ??
     Math.max(1, getSystemSettings().downloadTimeoutMinutes) * 60;
+  const excludedIds = [...new Set(excludedJobIds.filter(Number.isInteger))];
+  const exclusionSql = excludedIds.length
+    ? ` AND id NOT IN (${excludedIds.map(() => "?").join(", ")})`
+    : "";
   // ready_to_rename can also get stuck (rename not-found previously left jobs there).
   return getSqlite()
     .prepare(
@@ -859,12 +872,14 @@ export function failStaleDownloadingJobs(
         END,
         updated_at = CURRENT_TIMESTAMP
        WHERE status IN ('downloading', 'ready_to_rename')
-         AND datetime(updated_at) < datetime('now', ?)`
+         AND datetime(updated_at) < datetime('now', ?)
+         ${exclusionSql}`
     )
     .run(
       "Rename timed out waiting for OpenList file organization",
       errorMessage,
-      `-${Math.max(60, ageSeconds)} seconds`
+      `-${Math.max(60, ageSeconds)} seconds`,
+      ...excludedIds
     ).changes;
 }
 
@@ -990,6 +1005,17 @@ export function upsertEpisodeFile(input: {
       }
     })
     .run();
+}
+
+export function getEpisodeFileForFeedItem(feedItemId: number) {
+  const row = getDb()
+    .select()
+    .from(episodeFiles)
+    .where(eq(episodeFiles.feedItemId, feedItemId))
+    .orderBy(desc(episodeFiles.updatedAt), desc(episodeFiles.id))
+    .limit(1)
+    .get();
+  return row ? mapEpisodeFile(row as unknown as Record<string, unknown>) : null;
 }
 
 export function listEpisodeFiles(limit = 200) {

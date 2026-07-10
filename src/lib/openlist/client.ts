@@ -10,6 +10,12 @@ export interface OpenListTask {
   error: string;
 }
 
+export interface OpenListTaskListResult {
+  tasks: OpenListTask[];
+  available: boolean;
+  error: string | null;
+}
+
 export interface OpenListFileEntry {
   path: string;
   name: string;
@@ -87,20 +93,29 @@ export function isOfflineTaskSucceeded(task: OpenListTask) {
   return /success|succeeded|done|completed|finish/.test(status);
 }
 
-async function listTaskEndpoint(endpoint: string): Promise<OpenListTask[]> {
+async function listTaskEndpoint(endpoint: string): Promise<OpenListTaskListResult> {
   try {
     const payload = await openListGet<OpenListTask[] | { content?: OpenListTask[]; tasks?: OpenListTask[] }>(
       endpoint
     );
-    if (Array.isArray(payload)) return payload.map(normalizeTask);
+    if (Array.isArray(payload)) {
+      return { tasks: payload.map(normalizeTask), available: true, error: null };
+    }
     if (payload && typeof payload === "object") {
       const list = payload.content ?? payload.tasks ?? [];
-      return Array.isArray(list) ? list.map(normalizeTask) : [];
+      return {
+        tasks: Array.isArray(list) ? list.map(normalizeTask) : [],
+        available: true,
+        error: null
+      };
     }
-    return [];
-  } catch {
-    // Task listing is best-effort; OpenList builds may omit these endpoints.
-    return [];
+    return { tasks: [], available: true, error: null };
+  } catch (error) {
+    return {
+      tasks: [],
+      available: false,
+      error: errorMessage(error)
+    };
   }
 }
 

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import {
   isAuthEnabledFromEnv,
+  isLoopbackHostname,
   SESSION_COOKIE,
   verifyPasswordEdge,
   verifySessionTokenEdge
@@ -10,7 +11,18 @@ const PUBLIC_PATHS = new Set(["/login", "/favicon.ico", "/favicon.svg"]);
 
 export async function proxy(request: NextRequest) {
   if (!isAuthEnabledFromEnv()) {
-    return NextResponse.next();
+    if (isLoopbackHostname(request.nextUrl.hostname)) {
+      return NextResponse.next();
+    }
+    if (request.nextUrl.pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        { error: "AUTH_PASSWORD is required for non-local access" },
+        { status: 403 }
+      );
+    }
+    return new NextResponse("AUTH_PASSWORD is required for non-local access", {
+      status: 403
+    });
   }
 
   const { pathname } = request.nextUrl;

@@ -2,11 +2,20 @@ import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   isAuthEnabledFromEnv,
+  isLoopbackHostname,
   verifyPasswordEdge,
   verifySessionTokenEdge
 } from "@/lib/auth-edge";
 
 describe("auth-edge", () => {
+  it("recognizes only loopback hostnames for passwordless access", () => {
+    expect(isLoopbackHostname("localhost")).toBe(true);
+    expect(isLoopbackHostname("127.0.0.1")).toBe(true);
+    expect(isLoopbackHostname("[::1]")).toBe(true);
+    expect(isLoopbackHostname("192.168.1.10")).toBe(false);
+    expect(isLoopbackHostname("aniflow.example.com")).toBe(false);
+  });
+
   it("is open when AUTH_PASSWORD is unset", async () => {
     const previous = process.env.AUTH_PASSWORD;
     delete process.env.AUTH_PASSWORD;

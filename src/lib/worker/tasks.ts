@@ -12,8 +12,8 @@ import {
   pollAllSubscriptions,
   pollSubscription,
   reconcileDownloadingJobs,
-  scanAndRenameIncoming,
-  submitQueuedJobs
+  runDownloadMaintenance,
+  scanAndRenameIncoming
 } from "@/lib/worker/pipeline";
 
 let activeRunner: Promise<unknown> | null = null;
@@ -86,13 +86,11 @@ async function runWorkerTask(
         parseCleanupPayload(task.payloadJson)
       )) as unknown as Record<string, unknown>;
     case "scan_incoming":
-      await reconcileDownloadingJobs();
       await scanAndRenameIncoming();
+      await reconcileDownloadingJobs();
       return { ok: true, action: "scan_incoming" };
     case "submit_queued":
-      await submitQueuedJobs();
-      await reconcileDownloadingJobs();
-      await scanAndRenameIncoming();
+      await runDownloadMaintenance();
       return { ok: true, action: "submit_queued" };
   }
 }

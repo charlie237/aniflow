@@ -11,6 +11,7 @@ import {
   createOrUpdateJob,
   failStaleDownloadingJobs,
   findMetadataBySubscription,
+  getEpisodeFileForFeedItem,
   getFeedItem,
   getJob,
   getJobForFeedItem,
@@ -108,14 +109,22 @@ export async function pollAllSubscriptions() {
   };
 
   for (const subscription of listEnabledSubscriptions()) {
-    const result = await pollSubscription(subscription.id);
-    totals.fetched += result.fetched;
-    totals.discovered += result.discovered;
-    totals.queued += result.queued;
-    totals.skipped += result.skipped;
-    totals.failed += result.failed;
+    try {
+      const result = await pollSubscriptionFeed(subscription.id);
+      totals.fetched += result.fetched;
+      totals.discovered += result.discovered;
+      totals.queued += result.queued;
+      totals.skipped += result.skipped;
+      totals.failed += result.failed;
+    } catch (error) {
+      totals.failed += 1;
+      console.error(
+        `[pipeline] poll failed for subscription#${subscription.id}: ${errorMessage(error)}`
+      );
+    }
   }
 
+  await runDownloadMaintenance();
   return totals;
 }
 
@@ -151,6 +160,14 @@ export async function refreshSubscriptionFeedCache(subscriptionId: number) {
 }
 
 export async function pollSubscription(subscriptionId: number): Promise<PipelineResult> {
+  try {
+    return await pollSubscriptionFeed(subscriptionId);
+  } finally {
+    await runDownloadMaintenance();
+  }
+}
+
+async function pollSubscriptionFeed(subscriptionId: number): Promise<PipelineResult> {
   const subscription = getSubscription(subscriptionId);
   if (!subscription) throw new Error(`Subscription ${subscriptionId} not found`);
 
@@ -288,10 +305,15 @@ export async function pollSubscription(subscriptionId: number): Promise<Pipeline
   }
 
   touchSubscriptionPolled(subscription.id);
-  await submitQueuedJobs();
-  await reconcileDownloadingJobs();
-  await scanAndRenameIncoming();
   return result;
+}
+
+/** Keep download lifecycle work independent from RSS polling success. */
+export async function runDownloadMaintenance() {
+  // Scan first so late files can complete failed/ready jobs before retries are queued.
+  await scanAndRenameIncoming();
+  await reconcileDownloadingJobs();
+  await submitQueuedJobs();
 }
 
 export async function submitQueuedJobs() {
@@ -314,18 +336,22 @@ export async function reconcileDownloadingJobs() {
   const staleSeconds = Math.max(1, settings.downloadTimeoutMinutes) * 60;
   const downloading = listJobsByStatus(["downloading"]);
   if (downloading.length === 0) {
-    failStaleDownloadingJobs(staleSeconds);
-    return { checked: 0, failed: 0 };
+    const failed = failStaleDownloadingJobs(staleSeconds);
+    return { checked: 0, failed };
   }
 
   let failed = 0;
+  const protectedFromTimeout = new Set<number>();
 
   if (settings.openlistBaseUrl && settings.openlistToken) {
-    const [undone, done, transferring] = await Promise.all([
+    const [undoneResult, doneResult, transferringResult] = await Promise.all([
       listOfflineDownloadUndone(),
       listOfflineDownloadDone(),
       listOfflineDownloadTransferUndone()
     ]);
+    const undone = undoneResult.tasks;
+    const done = doneResult.tasks;
+    const transferring = transferringResult.tasks;
     const byId = new Map<string, OpenListTask>();
     for (const task of [...undone, ...done, ...transferring]) {
       if (task.id) byId.set(String(task.id), task);
@@ -335,6 +361,23 @@ export async function reconcileDownloadingJobs() {
       ...undone.map((task) => String(task.id)),
       ...transferring.map((task) => String(task.id))
     ]);
+    const activeTaskListsAvailable =
+      undoneResult.available && transferringResult.available;
+    if (!activeTaskListsAvailable) {
+      const unavailable = [
+        { name: "offline_download/undone", result: undoneResult },
+        {
+          name: "offline_download_transfer/undone",
+          result: transferringResult
+        }
+      ]
+        .filter(({ result }) => !result.available)
+        .map(({ name, result }) => `${name}: ${result.error ?? "unavailable"}`)
+        .join("; ");
+      console.warn(
+        `[pipeline] OpenList active task state unavailable; preserving jobs: ${unavailable}`
+      );
+    }
 
     for (const job of downloading) {
       if (!job.openlistTaskId) continue;
@@ -353,12 +396,21 @@ export async function reconcileDownloadingJobs() {
         touchDownloadingJobActivity(job.id);
         continue;
       }
+      if (!activeTaskListsAvailable) {
+        // A network/endpoint error is not evidence that the remote task vanished.
+        protectedFromTimeout.add(job.id);
+        continue;
+      }
       // Task not in active lists: either succeeded and was purged (115), or vanished.
       // Do not mark completed here; wait for file scan or stale timeout.
     }
   }
 
-  failed += failStaleDownloadingJobs(staleSeconds);
+  failed += failStaleDownloadingJobs(
+    staleSeconds,
+    undefined,
+    [...protectedFromTimeout]
+  );
   return { checked: downloading.length, failed };
 }
 
@@ -451,9 +503,13 @@ export async function submitJob(job: DownloadJob) {
   const targetPath = incomingPathForSubscription(subscription);
 
   // Atomic claim prevents web + worker double-submit of the same queued job.
-  if (job.status === "queued" && !claimQueuedJob(job.id)) {
-    console.log(`[pipeline] job#${job.id} already claimed by another worker`);
-    return;
+  let claimedAttempt = false;
+  if (job.status === "queued") {
+    if (!claimQueuedJob(job.id)) {
+      console.log(`[pipeline] job#${job.id} already claimed by another worker`);
+      return;
+    }
+    claimedAttempt = true;
   }
 
   try {
@@ -471,7 +527,7 @@ export async function submitJob(job: DownloadJob) {
       errorMessage: taskId
         ? null
         : "OpenList returned no offline task id; waiting for file or timeout"
-    });
+    }, { incrementAttempt: !claimedAttempt });
     console.log(
       `[pipeline] job#${job.id} submitted offline task=${taskId ?? "n/a"}`
     );
@@ -484,7 +540,7 @@ export async function submitJob(job: DownloadJob) {
         targetPath,
         errorMessage:
           "URL already in OpenList offline list; waiting for file in download directory"
-      });
+      }, { incrementAttempt: !claimedAttempt });
       console.log(
         `[pipeline] job#${job.id} already in offline list — waiting for file`
       );
@@ -494,7 +550,7 @@ export async function submitJob(job: DownloadJob) {
       status: "failed",
       targetPath,
       errorMessage: message
-    });
+    }, { incrementAttempt: !claimedAttempt });
     console.error(`[pipeline] job#${job.id} submit failed: ${message}`);
   }
 }
@@ -523,6 +579,7 @@ export async function scanAndRenameIncoming() {
 
   try {
     const subscriptions = listSubscriptions();
+    await recoverMovedReadyJobs(subscriptions, leaseOwner);
     const subscriptionPaths = subscriptions.flatMap((subscription) => {
       try {
         return [incomingPathForSubscription(subscription)];
@@ -617,6 +674,79 @@ export async function cleanupDeletedSubscriptionIncoming(
   }
 }
 
+/**
+ * A remote rename/move cannot share a transaction with SQLite. When a worker
+ * stops after the move but before the database update, finish that intent once
+ * the original file is gone and its recorded destination exists.
+ */
+async function recoverMovedReadyJobs(
+  subscriptions: Subscription[],
+  leaseOwner: string
+) {
+  const subscriptionById = new Map(
+    subscriptions.map((subscription) => [subscription.id, subscription])
+  );
+
+  for (const job of listJobsByStatus(["ready_to_rename"])) {
+    assertIncomingMutationLease(leaseOwner);
+    const subscription = subscriptionById.get(job.subscriptionId);
+    const pendingFile = getEpisodeFileForFeedItem(job.feedItemId);
+    if (
+      !subscription ||
+      !pendingFile ||
+      pendingFile.status !== "detected" ||
+      !pendingFile.finalPath
+    ) {
+      continue;
+    }
+
+    try {
+      const source = await findOpenListFile(pendingFile.originalPath);
+      if (source) continue;
+
+      const destination = await findOpenListFile(pendingFile.finalPath);
+      if (!destination) continue;
+
+      upsertEpisodeFile({
+        subscriptionId: subscription.id,
+        feedItemId: job.feedItemId,
+        episodeNumber: pendingFile.episodeNumber,
+        originalPath: pendingFile.originalPath,
+        finalPath: pendingFile.finalPath,
+        sizeBytes: destination.size,
+        status: "renamed",
+        errorMessage: null
+      });
+      updateJobStatus(job.id, "completed", {
+        targetPath: pendingFile.finalPath,
+        errorMessage: null
+      });
+      await cleanupEmptyDirectory(
+        getRemoteDirName(pendingFile.originalPath),
+        incomingPathForSubscription(subscription)
+      );
+      console.log(`[pipeline] recovered completed move for job#${job.id}`);
+    } catch (error) {
+      console.error(
+        `[pipeline] unable to recover ready job#${job.id}: ${errorMessage(error)}`
+      );
+    }
+  }
+}
+
+async function findOpenListFile(path: string) {
+  try {
+    const entries = await listOpenListFiles(getRemoteDirName(path), {
+      refresh: true
+    });
+    const name = getRemoteBaseName(path);
+    return entries.find((entry) => !entry.isDirectory && entry.name === name) ?? null;
+  } catch (error) {
+    if (isOpenListNotFoundError(error)) return null;
+    throw error;
+  }
+}
+
 async function renameIncomingFile(
   file: OpenListFileEntry,
   subscriptions: Subscription[]
@@ -649,17 +779,23 @@ async function renameIncomingFile(
   const jobMetadata = match.job
     ? getMetadataForFeedItem(match.job.feedItemId)
     : null;
-  const feedItemId = match.job?.feedItemId ?? null;
-  const cleanupRoot = match.job?.targetPath ?? incomingPathForSubscription(subscription);
+  const fallbackJob = match.job
+    ? null
+    : findCompletableJob(subscription, parsed.episodeNumber, parsed.releaseRevision);
+  const job = match.job ?? fallbackJob?.job ?? null;
+  const effectiveMetadata =
+    jobMetadata ?? (job ? getMetadataForFeedItem(job.feedItemId) : null);
+  const feedItemId = job?.feedItemId ?? null;
+  const cleanupRoot = incomingPathForSubscription(subscription);
 
   const variantFacets = {
-    episodeNumber: jobMetadata?.episodeNumber ?? parsed.episodeNumber,
-    releaseGroup: jobMetadata?.releaseGroup ?? parsed.releaseGroup,
-    resolution: jobMetadata?.resolution ?? parsed.resolution,
-    subtitleLanguage: jobMetadata?.subtitleLanguage ?? parsed.subtitleLanguage
+    episodeNumber: effectiveMetadata?.episodeNumber ?? parsed.episodeNumber,
+    releaseGroup: effectiveMetadata?.releaseGroup ?? parsed.releaseGroup,
+    resolution: effectiveMetadata?.resolution ?? parsed.resolution,
+    subtitleLanguage: effectiveMetadata?.subtitleLanguage ?? parsed.subtitleLanguage
   };
   const claimedRevision = resolveClaimedRevision({
-    jobMetadataRevision: jobMetadata?.releaseRevision,
+    jobMetadataRevision: effectiveMetadata?.releaseRevision,
     parsedRevision: parsed.releaseRevision
   });
   const highestKnown = getHighestReleaseRevisionForVariant(
@@ -671,8 +807,8 @@ async function renameIncomingFile(
     highestKnownRevision: highestKnown
   });
   if (!importDecision.allow) {
-    if (match.job) {
-      updateJobStatus(match.job.id, "skipped", {
+    if (job) {
+      updateJobStatus(job.id, "skipped", {
         targetPath: file.path,
         errorMessage: importDecision.reason
       });
@@ -684,13 +820,13 @@ async function renameIncomingFile(
   }
 
   // Preferred feed item may have moved on while this file was still downloading.
-  if (match.job && jobMetadata) {
+  if (job && effectiveMetadata) {
     const preferredFeedItemId = getPreferredFeedItemIdForRelease(
       subscription.id,
-      jobMetadata
+      effectiveMetadata
     );
-    if (preferredFeedItemId != null && preferredFeedItemId !== match.job.feedItemId) {
-      updateJobStatus(match.job.id, "skipped", {
+    if (preferredFeedItemId != null && preferredFeedItemId !== job.feedItemId) {
+      updateJobStatus(job.id, "skipped", {
         targetPath: file.path,
         errorMessage: "Superseded by a newer release revision"
       });
@@ -709,8 +845,8 @@ async function renameIncomingFile(
     libraryFileExists: libraryExists
   });
   if (!overwriteDecision.allow) {
-    if (match.job) {
-      updateJobStatus(match.job.id, "skipped", {
+    if (job) {
+      updateJobStatus(job.id, "skipped", {
         targetPath: file.path,
         errorMessage: overwriteDecision.reason
       });
@@ -727,9 +863,21 @@ async function renameIncomingFile(
     libraryExists && settings.replaceExistingOnRevision && overwriteDecision.allow;
 
   try {
-    if (match.job) {
-      updateJobStatus(match.job.id, "ready_to_rename", {
+    if (job) {
+      updateJobStatus(job.id, "ready_to_rename", {
         targetPath: file.path,
+        errorMessage: null
+      });
+      // Persist the intended destination before mutating OpenList. This makes a
+      // completed remote move recoverable after a worker restart.
+      upsertEpisodeFile({
+        subscriptionId: subscription.id,
+        feedItemId,
+        episodeNumber: parsed.episodeNumber,
+        originalPath: file.path,
+        finalPath,
+        sizeBytes: file.size,
+        status: "detected",
         errorMessage: null
       });
     }
@@ -766,24 +914,17 @@ async function renameIncomingFile(
       sizeBytes: file.size,
       status: "renamed"
     });
-    if (match.job) {
-      updateJobStatus(match.job.id, "completed", {
+    if (job) {
+      updateJobStatus(job.id, "completed", {
         targetPath: finalPath,
         errorMessage: null
       });
-    } else {
-      markCompletedJob(
-        subscription,
-        parsed.episodeNumber,
-        claimedRevision,
-        finalPath
-      );
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // Previously not-found returned silently and left jobs stuck in ready_to_rename.
-    if (match.job) {
-      updateJobStatus(match.job.id, "failed", {
+    if (job) {
+      updateJobStatus(job.id, "failed", {
         targetPath: file.path,
         errorMessage: isOpenListNotFoundError(error)
           ? `Source file not found during rename: ${message}`
@@ -872,14 +1013,19 @@ async function cleanupEmptyDirectory(path: string, root: string) {
 
 async function listIncomingMediaFiles(
   root: string,
-  depth = 0
+  visited = new Set<string>()
 ): Promise<OpenListFileEntry[]> {
-  if (depth > 4) return [];
-  const entries = await listOpenListFiles(root, { refresh: depth === 0 });
+  const normalizedRoot = joinRemotePath(root);
+  if (visited.has(normalizedRoot)) return [];
+  visited.add(normalizedRoot);
+
+  const entries = await listOpenListFiles(normalizedRoot, {
+    refresh: visited.size === 1
+  });
   const files: OpenListFileEntry[] = [];
   for (const entry of entries) {
     if (entry.isDirectory) {
-      files.push(...(await listIncomingMediaFiles(entry.path, depth + 1)));
+      files.push(...(await listIncomingMediaFiles(entry.path, visited)));
     } else if (isMediaFile(entry.path)) {
       files.push(entry);
     }
@@ -897,7 +1043,10 @@ function findIncomingMatch(
   if (tracked) return tracked;
 
   const subscription = findSubscriptionByFilenameRules(
-    subscriptions.filter((item) => item.enabled),
+    subscriptionsForIncomingFile(
+      subscriptions.filter((item) => item.enabled),
+      filePath
+    ),
     filename,
     parsed
   );
@@ -923,16 +1072,25 @@ function findTrackedJobMatch(
     score: number;
   }> = [];
 
-  for (const job of listJobsByStatus(["downloading", "ready_to_rename"])) {
+  for (const job of listJobsByStatus(["downloading", "ready_to_rename", "failed"])) {
     const subscription = subscriptionById.get(job.subscriptionId);
     if (!subscription) continue;
+    const pendingFile = getEpisodeFileForFeedItem(job.feedItemId);
+    const expectedRenamedSource =
+      pendingFile?.status === "detected" && pendingFile.finalPath
+        ? joinRemotePath(
+            getRemoteDirName(pendingFile.originalPath),
+            getRemoteBaseName(pendingFile.finalPath)
+          )
+        : null;
+    const isExpectedRenamedSource = expectedRenamedSource === filePath;
     let jobRoot: string;
     try {
       jobRoot = job.targetPath ?? incomingPathForSubscription(subscription);
     } catch {
       continue;
     }
-    if (!isRemotePathWithin(filePath, jobRoot)) {
+    if (!isExpectedRenamedSource && !isRemotePathWithin(filePath, jobRoot)) {
       continue;
     }
 
@@ -946,13 +1104,14 @@ function findTrackedJobMatch(
     const decision = evaluateRules(feedItem.title, metadata, listRules(subscription.id));
     if (!decision.allowed) continue;
 
-    const score = scoreTrackedJobIdentity({
-      subscriptionName: subscription.name,
-      feedTitle: feedItem.title,
-      metadata,
-      filename,
-      parsed
-    });
+    const score =
+      scoreTrackedJobIdentity({
+        subscriptionName: subscription.name,
+        feedTitle: feedItem.title,
+        metadata,
+        filename,
+        parsed
+      }) + (isExpectedRenamedSource ? MIN_TRACKED_JOB_MATCH_SCORE : 0);
     if (score < MIN_TRACKED_JOB_MATCH_SCORE) continue;
 
     candidates.push({ subscription, job, metadata, score });
@@ -1004,6 +1163,35 @@ function findSubscriptionByFilenameRules(
   return pickBestIncomingSubscriptionMatch(candidates);
 }
 
+function subscriptionsForIncomingFile(
+  subscriptions: Subscription[],
+  filePath: string
+) {
+  const matches = subscriptions.flatMap((subscription) => {
+    try {
+      const incomingPath = incomingPathForSubscription(subscription);
+      return isRemotePathWithin(filePath, incomingPath)
+        ? [{ subscription, incomingPath }]
+        : [];
+    } catch {
+      return [];
+    }
+  });
+  if (matches.length === 0) return subscriptions;
+
+  const deepestPathLength = Math.max(
+    ...matches.map(
+      ({ incomingPath }) => incomingPath.split("/").filter(Boolean).length
+    )
+  );
+  return matches
+    .filter(
+      ({ incomingPath }) =>
+        incomingPath.split("/").filter(Boolean).length === deepestPathLength
+    )
+    .map(({ subscription }) => subscription);
+}
+
 function assertIncomingMutationLease(owner: string) {
   if (!refreshWorkerLease(INCOMING_MUTATION_LEASE, owner)) {
     throw new Error("Incoming mutation lease was lost");
@@ -1014,11 +1202,10 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
-function markCompletedJob(
+function findCompletableJob(
   subscription: Subscription,
   episodeNumber: number,
-  releaseRevision: number,
-  finalPath: string
+  releaseRevision: number
 ) {
   // Prefer exact revision, then highest revision with an in-flight job.
   // Filename often lacks "v2" even when the RSS metadata had it.
@@ -1039,11 +1226,9 @@ function markCompletedJob(
         right.item.feedItemId - left.item.feedItemId
       );
     })[0];
-  if (!metadata?.job) return;
-  updateJobStatus(metadata.job.id, "completed", {
-    targetPath: finalPath,
-    errorMessage: null
-  });
+  return metadata?.job
+    ? { job: metadata.job, feedItemId: metadata.item.feedItemId }
+    : null;
 }
 
 function getJobForItem(feedItemId: number) {

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { fetchBytes } from "@/lib/net/fetch";
+import { assertMikanDownloadUrl } from "@/lib/net/url-policy";
 
 type BencodeValue = Buffer | number | BencodeList | BencodeDict;
 
@@ -11,9 +12,10 @@ interface BencodeDict {
 
 export async function resolveOfflineDownloadUrl(url: string) {
   if (url.startsWith("magnet:?")) return url;
-  if (!looksLikeTorrentUrl(url)) return url;
+  const targetUrl = assertMikanDownloadUrl(url).toString();
+  if (!looksLikeTorrentUrl(targetUrl)) return targetUrl;
 
-  const response = await fetchBytes(url, {
+  const response = await fetchBytes(targetUrl, {
     headers: {
       Accept: "application/x-bittorrent,*/*",
       "User-Agent": "Aniflow/0.1 torrent resolver"
@@ -22,7 +24,7 @@ export async function resolveOfflineDownloadUrl(url: string) {
   });
 
   if (!response.ok) {
-    throw new Error(`Torrent fetch failed (${response.status}) for ${url}`);
+    throw new Error(`Torrent fetch failed (${response.status}) for ${targetUrl}`);
   }
 
   return torrentBufferToMagnet(response.body);

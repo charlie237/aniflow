@@ -23,11 +23,25 @@ describe("fetchText", () => {
     const fetchMock = vi.fn().mockRejectedValue(new Error("direct fetch failed"));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(fetchText("https://example.invalid/rss.xml")).rejects.toThrow(
+    await expect(
+      fetchText("https://mikanani.me/RSS/Bangumi?bangumiId=1")
+    ).rejects.toThrow(
       "direct fetch failed"
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(httpRequest).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-Mikan RSS URLs before making a request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchText("http://127.0.0.1/internal.xml")).rejects.toThrow(
+      /Only Mikan RSS URLs/i
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(httpRequest).not.toHaveBeenCalled();
   });
 });

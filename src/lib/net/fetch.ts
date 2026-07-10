@@ -2,6 +2,13 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { connect as tlsConnect } from "node:tls";
 import { URL } from "node:url";
+import {
+  assertMikanDownloadUrl,
+  assertMikanRssUrl
+} from "@/lib/net/url-policy";
+
+const DEFAULT_TIMEOUT_MS = 20_000;
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
 
 export interface FetchTextOptions {
   headers?: Record<string, string>;
@@ -11,18 +18,20 @@ export interface FetchTextOptions {
 export type FetchBytesOptions = FetchTextOptions;
 
 export async function fetchText(url: string, options: FetchTextOptions = {}) {
+  const target = assertMikanRssUrl(url);
   const proxy = await proxyForUrl();
   if (proxy) {
-    return fetchTextViaProxy(url, proxy, options);
+    return fetchTextViaProxy(target, proxy, options);
   }
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(target, {
       headers: options.headers,
       cache: "no-store",
-      signal: AbortSignal.timeout(options.timeoutMs ?? 20000)
+      redirect: "manual",
+      signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
     });
-    const body = await response.text();
+    const body = (await readFetchBody(response)).toString("utf8");
     return { ok: response.ok, status: response.status, body };
   } catch (error) {
     throw enrichFetchError(url, error);
@@ -30,18 +39,20 @@ export async function fetchText(url: string, options: FetchTextOptions = {}) {
 }
 
 export async function fetchBytes(url: string, options: FetchBytesOptions = {}) {
+  const target = assertMikanDownloadUrl(url);
   const proxy = await proxyForUrl();
   if (proxy) {
-    return fetchBytesViaProxy(url, proxy, options);
+    return fetchBytesViaProxy(target, proxy, options);
   }
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(target, {
       headers: options.headers,
       cache: "no-store",
-      signal: AbortSignal.timeout(options.timeoutMs ?? 20000)
+      redirect: "manual",
+      signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
     });
-    const body = Buffer.from(await response.arrayBuffer());
+    const body = await readFetchBody(response);
     return { ok: response.ok, status: response.status, body };
   } catch (error) {
     throw enrichFetchError(url, error);
@@ -49,24 +60,22 @@ export async function fetchBytes(url: string, options: FetchBytesOptions = {}) {
 }
 
 function fetchTextViaProxy(
-  targetUrl: string,
+  target: URL,
   proxyUrl: string,
   options: FetchTextOptions
 ) {
-  const target = new URL(targetUrl);
-  const proxy = new URL(proxyUrl);
+  const proxy = parseProxyUrl(proxyUrl);
   return target.protocol === "https:"
     ? fetchHttpsTextViaProxy(target, proxy, options)
     : fetchHttpTextViaProxy(target, proxy, options);
 }
 
 function fetchBytesViaProxy(
-  targetUrl: string,
+  target: URL,
   proxyUrl: string,
   options: FetchBytesOptions
 ) {
-  const target = new URL(targetUrl);
-  const proxy = new URL(proxyUrl);
+  const proxy = parseProxyUrl(proxyUrl);
   return target.protocol === "https:"
     ? fetchHttpsBytesViaProxy(target, proxy, options)
     : fetchHttpBytesViaProxy(target, proxy, options);
@@ -78,11 +87,11 @@ function fetchHttpTextViaProxy(
   options: FetchTextOptions
 ) {
   return new Promise<{ ok: boolean; status: number; body: string }>((resolve, reject) => {
-    const request = httpRequest(
+    const request = proxyRequest(proxy)(
       {
         protocol: proxy.protocol,
         hostname: proxy.hostname,
-        port: proxy.port || "80",
+        port: proxyPort(proxy),
         method: "GET",
         path: target.toString(),
         headers: {
@@ -90,10 +99,12 @@ function fetchHttpTextViaProxy(
           ...options.headers,
           ...proxyAuthorizationHeader(proxy)
         },
-        timeout: options.timeoutMs ?? 20000
+        timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS
       },
       (response) => {
-        collectBody(response, resolve);
+        void collectBody(response, options.timeoutMs).then(resolve, (error) =>
+          reject(enrichFetchError(target.toString(), error))
+        );
       }
     );
     request.on("error", (error) => reject(enrichFetchError(target.toString(), error)));
@@ -111,11 +122,11 @@ function fetchHttpBytesViaProxy(
 ) {
   return new Promise<{ ok: boolean; status: number; body: Buffer }>(
     (resolve, reject) => {
-      const request = httpRequest(
+      const request = proxyRequest(proxy)(
         {
           protocol: proxy.protocol,
           hostname: proxy.hostname,
-          port: proxy.port || "80",
+          port: proxyPort(proxy),
           method: "GET",
           path: target.toString(),
           headers: {
@@ -123,10 +134,12 @@ function fetchHttpBytesViaProxy(
             ...options.headers,
             ...proxyAuthorizationHeader(proxy)
           },
-          timeout: options.timeoutMs ?? 20000
+          timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS
         },
         (response) => {
-          collectBinaryBody(response, resolve);
+          void collectBinaryBody(response, options.timeoutMs).then(resolve, (error) =>
+            reject(enrichFetchError(target.toString(), error))
+          );
         }
       );
       request.on("error", (error) =>
@@ -146,17 +159,17 @@ function fetchHttpsTextViaProxy(
   options: FetchTextOptions
 ) {
   return new Promise<{ ok: boolean; status: number; body: string }>((resolve, reject) => {
-    const connectRequest = httpRequest({
+    const connectRequest = proxyRequest(proxy)({
       protocol: proxy.protocol,
       hostname: proxy.hostname,
-      port: proxy.port || "80",
+      port: proxyPort(proxy),
       method: "CONNECT",
       path: `${target.hostname}:${target.port || 443}`,
       headers: {
         Host: `${target.hostname}:${target.port || 443}`,
         ...proxyAuthorizationHeader(proxy)
       },
-      timeout: options.timeoutMs ?? 20000
+      timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS
     });
 
     connectRequest.once("connect", (response, socket) => {
@@ -187,10 +200,12 @@ function fetchHttpsTextViaProxy(
             Host: target.host,
             ...options.headers
           },
-          timeout: options.timeoutMs ?? 20000
+          timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS
         },
         (httpsResponse) => {
-          collectBody(httpsResponse, resolve);
+          void collectBody(httpsResponse, options.timeoutMs).then(resolve, (error) =>
+            reject(enrichFetchError(target.toString(), error))
+          );
         }
       );
       request.on("error", (error) =>
@@ -219,17 +234,17 @@ function fetchHttpsBytesViaProxy(
 ) {
   return new Promise<{ ok: boolean; status: number; body: Buffer }>(
     (resolve, reject) => {
-      const connectRequest = httpRequest({
+      const connectRequest = proxyRequest(proxy)({
         protocol: proxy.protocol,
         hostname: proxy.hostname,
-        port: proxy.port || "80",
+        port: proxyPort(proxy),
         method: "CONNECT",
         path: `${target.hostname}:${target.port || 443}`,
         headers: {
           Host: `${target.hostname}:${target.port || 443}`,
           ...proxyAuthorizationHeader(proxy)
         },
-        timeout: options.timeoutMs ?? 20000
+        timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS
       });
 
       connectRequest.once("connect", (response, socket) => {
@@ -260,10 +275,13 @@ function fetchHttpsBytesViaProxy(
               Host: target.host,
               ...options.headers
             },
-            timeout: options.timeoutMs ?? 20000
+            timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS
           },
           (httpsResponse) => {
-            collectBinaryBody(httpsResponse, resolve);
+            void collectBinaryBody(httpsResponse, options.timeoutMs).then(
+              resolve,
+              (error) => reject(enrichFetchError(target.toString(), error))
+            );
           }
         );
         request.on("error", (error) =>
@@ -286,36 +304,111 @@ function fetchHttpsBytesViaProxy(
   );
 }
 
-function collectBody(
-  response: NodeJS.ReadableStream & { statusCode?: number },
-  resolve: (value: { ok: boolean; status: number; body: string }) => void
-) {
-  const chunks: Buffer[] = [];
-  response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-  response.on("end", () => {
-    const status = response.statusCode ?? 0;
-    resolve({
-      ok: status >= 200 && status < 300,
-      status,
-      body: Buffer.concat(chunks).toString("utf8")
+type ProxyResponse = NodeJS.ReadableStream & {
+  statusCode?: number;
+  destroy(error?: Error): void;
+};
+
+async function collectBody(response: ProxyResponse, timeoutMs?: number) {
+  const body = await collectResponse(response, timeoutMs);
+  const status = response.statusCode ?? 0;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    body: body.toString("utf8")
+  };
+}
+
+async function collectBinaryBody(response: ProxyResponse, timeoutMs?: number) {
+  const body = await collectResponse(response, timeoutMs);
+  const status = response.statusCode ?? 0;
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    body
+  };
+}
+
+function collectResponse(response: ProxyResponse, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  return new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    let settled = false;
+    const timer = setTimeout(() => {
+      fail(new Error("response timed out"));
+    }, timeoutMs);
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(Buffer.concat(chunks));
+    };
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const normalized = error instanceof Error ? error : new Error(String(error));
+      response.destroy(normalized);
+      reject(normalized);
+    };
+
+    response.on("data", (chunk) => {
+      const buffer = Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > MAX_RESPONSE_BYTES) {
+        fail(new Error(`response exceeds ${MAX_RESPONSE_BYTES} bytes`));
+        return;
+      }
+      chunks.push(buffer);
+    });
+    response.once("end", finish);
+    response.once("error", fail);
+    response.once("aborted", () => fail(new Error("response aborted")));
+    response.once("close", () => {
+      if (!settled) fail(new Error("response closed before completion"));
     });
   });
 }
 
-function collectBinaryBody(
-  response: NodeJS.ReadableStream & { statusCode?: number },
-  resolve: (value: { ok: boolean; status: number; body: Buffer }) => void
-) {
+async function readFetchBody(response: Response) {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_RESPONSE_BYTES) {
+    throw new Error(`response exceeds ${MAX_RESPONSE_BYTES} bytes`);
+  }
+  if (!response.body) return Buffer.alloc(0);
+
+  const reader = response.body.getReader();
   const chunks: Buffer[] = [];
-  response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-  response.on("end", () => {
-    const status = response.statusCode ?? 0;
-    resolve({
-      ok: status >= 200 && status < 300,
-      status,
-      body: Buffer.concat(chunks)
-    });
-  });
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = Buffer.from(value);
+    totalBytes += chunk.length;
+    if (totalBytes > MAX_RESPONSE_BYTES) {
+      await reader.cancel();
+      throw new Error(`response exceeds ${MAX_RESPONSE_BYTES} bytes`);
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+function parseProxyUrl(value: string) {
+  const proxy = new URL(value);
+  if (proxy.protocol !== "http:" && proxy.protocol !== "https:") {
+    throw new Error(`Unsupported proxy protocol: ${proxy.protocol}`);
+  }
+  return proxy;
+}
+
+function proxyRequest(proxy: URL) {
+  return proxy.protocol === "https:" ? httpsRequest : httpRequest;
+}
+
+function proxyPort(proxy: URL) {
+  return proxy.port || (proxy.protocol === "https:" ? "443" : "80");
 }
 
 async function proxyForUrl() {

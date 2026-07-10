@@ -8,6 +8,12 @@ export function isAuthEnabledFromEnv() {
   return Boolean(process.env.AUTH_PASSWORD?.trim());
 }
 
+export function isLoopbackHostname(hostname: string) {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
+  if (normalized === "localhost" || normalized === "::1") return true;
+  return /^127(?:\.\d{1,3}){3}$/.test(normalized);
+}
+
 export function authSecretFromEnv() {
   const password = process.env.AUTH_PASSWORD?.trim() ?? "";
   const secret = process.env.AUTH_SECRET?.trim();
