@@ -66,7 +66,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Compose 会启动共享 `./data/aniflow.sqlite` 的 `web` 与 `worker` 服务。Web 端口默认绑定 `127.0.0.1`。未设置 `AUTH_PASSWORD` 时请保持该绑定；需要远程访问时请使用带鉴权的反向代理，或显式修改端口绑定。
+Compose 会启动共享 `./data/aniflow.sqlite` 的 `web` 与 `worker` 服务，并默认在所有网络接口发布 Web 端口 `3000`。公网部署必须设置 `AUTH_PASSWORD`，同时建议通过防火墙限制来源并配置 HTTPS 反向代理。
 
 ## 命名规则
 
