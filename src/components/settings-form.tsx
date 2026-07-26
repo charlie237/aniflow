@@ -2,9 +2,9 @@ import { Save } from "lucide-react";
 import type { InputHTMLAttributes } from "react";
 import {
   check115ConnectivityAction,
-  resetRuntimeDataAction,
   saveSettingsAction
 } from "@/app/actions";
+import { ResetRuntimeDialog } from "@/components/reset-runtime-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -159,7 +159,7 @@ export function SettingsForm({
                 ].map((token) => (
                   <span
                     key={token}
-                    className="rounded-[6px] border border-[var(--line)] bg-white px-2 py-1"
+                    className="rounded-[6px] border border-[var(--line)] bg-[var(--input)] px-2 py-1"
                   >
                     {token}
                   </span>
@@ -247,28 +247,20 @@ export function SettingsForm({
         </Card>
       </form>
 
-      <form action={resetRuntimeDataAction}>
-        <Card>
-          <CardHeader>
-            <CardTitle>维护</CardTitle>
-            <CardDescription>
-              清空 RSS 抓取结果、解析元数据、下载队列和文件扫描记录；保留后台设置、订阅和筛选规则。
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            {resetStatus ? <ResetStatus status={resetStatus} /> : null}
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" name="confirmRuntimeReset" value="1" />
-              确认清空运行数据
-            </label>
-            <div>
-              <Button variant="danger" type="submit">
-                清空运行数据
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </form>
+      <Card>
+        <CardHeader>
+          <CardTitle>维护</CardTitle>
+          <CardDescription>
+            清空 RSS 抓取结果、解析元数据、下载队列和文件扫描记录；保留后台设置、订阅和筛选规则。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+          {resetStatus ? <ResetStatus status={resetStatus} /> : null}
+          <div>
+            <ResetRuntimeDialog />
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -276,14 +268,14 @@ export function SettingsForm({
 function ResetStatus({ status }: { status: "runtime" | "confirm" }) {
   if (status === "confirm") {
     return (
-      <div className="rounded-[var(--radius)] border border-[#d92d2040] bg-[#d92d2012] p-3 text-sm text-[var(--danger)]">
-        需要先勾选确认清空运行数据。
+      <div className="rounded-[var(--radius)] border border-[var(--danger-soft-border)] bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger-text)]">
+        确认文案不正确。请输入「清空运行数据」后再提交。
       </div>
     );
   }
 
   return (
-    <div className="rounded-[var(--radius)] border border-[#0f9f6e40] bg-[#0f9f6e12] p-3 text-sm text-[#067647]">
+    <div className="rounded-[var(--radius)] border border-[var(--signal-soft-border)] bg-[var(--signal-soft)] p-3 text-sm text-[var(--signal-text)]">
       已清空运行数据，后台设置、订阅和筛选规则已保留。
     </div>
   );
@@ -294,8 +286,8 @@ function CheckResult({ result }: { result: OpenList115CheckResult }) {
     <div
       className={
         result.ok
-          ? "rounded-[var(--radius)] border border-[#0f9f6e40] bg-[#0f9f6e12] p-3 text-sm text-[#067647]"
-          : "rounded-[var(--radius)] border border-[#d92d2040] bg-[#d92d2012] p-3 text-sm text-[var(--danger)]"
+          ? "rounded-[var(--radius)] border border-[var(--signal-soft-border)] bg-[var(--signal-soft)] p-3 text-sm text-[var(--signal-text)]"
+          : "rounded-[var(--radius)] border border-[var(--danger-soft-border)] bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger-text)]"
       }
     >
       <div className="font-medium">{result.ok ? "连接正常" : "检测未通过"}</div>
@@ -322,7 +314,7 @@ function ModeSelect({
         id="openlist115Mode"
         name="openlist115Mode"
         defaultValue={defaultValue}
-        className="flex h-9 w-full rounded-[var(--radius)] border border-[var(--line)] bg-white px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
+        className="flex h-9 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
       >
         <option value="115 Cloud">115 Cloud</option>
         <option value="115 Open">115 Open</option>

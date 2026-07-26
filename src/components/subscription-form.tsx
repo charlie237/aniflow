@@ -19,6 +19,7 @@ import {
   restoreSubscriptionAction,
   updateParsedSubscriptionAction
 } from "@/app/actions";
+import { StaggerChildren } from "@/components/motion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +29,14 @@ import {
   CardHeader,
   CardTitle
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { FilterRule, Subscription } from "@/lib/db/types";
@@ -347,7 +356,7 @@ function SubscriptionGroup({
   onToggleEdit: (id: number) => void;
 }) {
   return (
-    <div className="grid gap-3">
+    <StaggerChildren className="grid gap-3" y={8} duration={0.32} stagger={0.04}>
       {subscriptions.map((subscription) => (
         <SubscriptionItem
           key={subscription.id}
@@ -357,7 +366,7 @@ function SubscriptionGroup({
           onToggleEdit={() => onToggleEdit(subscription.id)}
         />
       ))}
-    </div>
+    </StaggerChildren>
   );
 }
 
@@ -373,7 +382,7 @@ function SubscriptionItem({
   onToggleEdit: () => void;
 }) {
   return (
-    <div className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-white p-3 text-sm">
+    <div className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-muted)] p-3 text-sm shadow-[var(--shadow)] transition-colors hover:border-[var(--line-strong)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
           <div className="font-medium">{subscription.name}</div>
@@ -406,28 +415,7 @@ function SubscriptionItem({
               {subscription.enabled ? "归档" : "恢复追更"}
             </Button>
           </form>
-          <form
-            action={deleteSubscriptionAction}
-            onSubmit={(event) => {
-              const form = event.currentTarget;
-              const cleanupIncoming = new FormData(form).has("cleanupIncoming");
-              const message = cleanupIncoming
-                ? `删除订阅「${subscription.name}」，并清理下载目录中可明确匹配的残留文件？媒体库文件不会被删除。`
-                : `删除订阅「${subscription.name}」？`;
-              if (!window.confirm(message)) event.preventDefault();
-            }}
-            className="flex flex-wrap items-center gap-2"
-          >
-            <input type="hidden" name="id" value={subscription.id} />
-            <label className="flex items-center gap-1 text-xs text-[var(--muted)]">
-              <input type="checkbox" name="cleanupIncoming" value="1" />
-              清下载残留
-            </label>
-            <Button type="submit" variant="danger" size="sm">
-              <Trash2 />
-              删除
-            </Button>
-          </form>
+          <DeleteSubscriptionDialog subscription={subscription} />
         </div>
       </div>
       <SubscriptionSummary subscription={subscription} rules={rules} />
@@ -435,6 +423,78 @@ function SubscriptionItem({
         <EditSubscriptionForm subscription={subscription} rules={rules} />
       ) : null}
     </div>
+  );
+}
+
+function DeleteSubscriptionDialog({
+  subscription
+}: {
+  subscription: Subscription;
+}) {
+  const [open, setOpen] = useState(false);
+  const [cleanupIncoming, setCleanupIncoming] = useState(false);
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) setCleanupIncoming(false);
+      }}
+    >
+      <DialogTrigger asChild>
+        <Button type="button" variant="danger" size="sm">
+          <Trash2 />
+          删除
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>删除订阅</DialogTitle>
+          <DialogDescription>
+            确认删除「{subscription.name}」？此操作不可撤销。
+          </DialogDescription>
+        </DialogHeader>
+        <form
+          action={deleteSubscriptionAction}
+          className="grid gap-4"
+          onSubmit={() => setOpen(false)}
+        >
+          <input type="hidden" name="id" value={subscription.id} />
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-muted)] p-3 text-sm">
+            <input
+              type="checkbox"
+              name="cleanupIncoming"
+              value="1"
+              checked={cleanupIncoming}
+              onChange={(event) => setCleanupIncoming(event.target.checked)}
+              className="mt-0.5"
+            />
+            <span className="grid gap-1">
+              <span className="font-medium text-[var(--foreground)]">
+                同时清下载残留
+              </span>
+              <span className="text-xs leading-5 text-[var(--muted)]">
+                清理该订阅下载目录中可明确匹配的残留文件。媒体库文件不会被删除。
+              </span>
+            </span>
+          </label>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setOpen(false)}
+            >
+              取消
+            </Button>
+            <Button type="submit" variant="danger">
+              <Trash2 />
+              {cleanupIncoming ? "删除并清理" : "确认删除"}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -591,7 +651,7 @@ function SelectField({
     return (
       <div className="grid gap-1.5">
         <Label>{label}</Label>
-        <div className="flex h-9 items-center rounded-[var(--radius)] border border-dashed border-[var(--line)] bg-white px-3 text-sm text-[var(--muted)]">
+        <div className="flex h-9 items-center rounded-[var(--radius)] border border-dashed border-[var(--line)] bg-[var(--input)] px-3 text-sm text-[var(--muted)]">
           未解析到候选值
         </div>
       </div>
@@ -607,7 +667,7 @@ function SelectField({
         onChange={(event: ChangeEvent<HTMLSelectElement>) =>
           onChange?.(event.target.value)
         }
-        className="flex h-9 w-full rounded-[var(--radius)] border border-[var(--line)] bg-white px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
+        className="flex h-9 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
       >
         <option value="">{placeholder ?? "未选择"}</option>
         {values.map((option) => (
@@ -672,7 +732,7 @@ function FilterPreview({
   );
 
   return (
-    <div className="grid gap-2 rounded-[var(--radius)] border border-[var(--line)] bg-white p-3">
+    <div className="grid gap-2 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] p-3">
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <div className="font-medium">当前条件预览</div>
         <Badge variant={matchedCount > 0 ? "signal" : "amber"}>
@@ -741,8 +801,8 @@ function FilterTag({
       onClick={() => onClick(value)}
       className={
         active
-          ? "rounded-[6px] border border-[#008f6840] bg-[#008f6814] px-2 py-0.5 text-xs font-medium text-[#006b4f] transition-colors hover:bg-[#008f6820]"
-          : "rounded-[6px] border border-[var(--line)] bg-[var(--panel-strong)] px-2 py-0.5 text-xs font-medium text-[var(--muted)] transition-colors hover:border-[#008f6840] hover:bg-[#008f6814] hover:text-[#006b4f]"
+          ? "rounded-[var(--radius-sm)] border border-[var(--signal-soft-border)] bg-[var(--signal-soft)] px-2 py-0.5 text-xs font-medium text-[var(--signal-text)] transition-colors hover:opacity-90"
+          : "rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--panel-strong)] px-2 py-0.5 text-xs font-medium text-[var(--muted)] transition-colors hover:border-[var(--signal-soft-border)] hover:bg-[var(--signal-soft)] hover:text-[var(--signal-text)]"
       }
     >
       {value}

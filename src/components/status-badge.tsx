@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import type { JobStatus } from "@/lib/db/types";
 
 const statusLabels: Record<JobStatus, string> = {
@@ -24,5 +25,17 @@ export function StatusBadge({ status }: { status: JobStatus }) {
             ? "violet"
             : "muted";
 
-  return <Badge variant={variant}>{statusLabels[status]}</Badge>;
+  const pulse = status === "downloading" || status === "queued";
+
+  return (
+    <Badge
+      variant={variant}
+      className={cn(pulse && "status-live", status === "downloading" && "status-live-strong")}
+    >
+      {pulse ? (
+        <span className="status-live-dot" aria-hidden />
+      ) : null}
+      {statusLabels[status]}
+    </Badge>
+  );
 }

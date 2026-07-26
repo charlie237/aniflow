@@ -85,7 +85,7 @@ export function RssFeedTable({ items }: { items: DashboardData["rssItems"] }) {
           <select
             value={subscriptionId}
             onChange={(event) => setSubscriptionId(event.target.value)}
-            className="h-8 min-w-[160px] rounded-[var(--radius)] border border-[var(--line)] bg-white px-2.5 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
+            className="h-8 min-w-[160px] rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] px-2.5 text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
           >
             <option value="all">全部订阅</option>
             {subscriptionOptions.map((subscription) => (

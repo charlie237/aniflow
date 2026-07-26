@@ -29,7 +29,7 @@ export function TablePagination({
         <select
           value={pageSize}
           onChange={(event) => onPageSizeChange(Number(event.target.value))}
-          className="h-8 rounded-[var(--radius)] border border-[var(--line)] bg-white px-2 text-xs focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
+          className="h-8 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] px-2 text-xs focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
         >
           {[10, 20, 50].map((size) => (
             <option key={size} value={size}>

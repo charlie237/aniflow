@@ -15,7 +15,7 @@ export default async function SettingsPage({
     <AppShell>
       <div className="mx-auto grid w-full max-w-5xl gap-5 px-4 py-6 md:px-6">
         <section>
-          <h1 className="text-3xl font-semibold tracking-normal">后台设置</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">后台设置</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">
             配置 OpenList 115 离线、TMDB 展示令牌和 Worker 轮询间隔。
           </p>

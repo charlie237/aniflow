@@ -9,13 +9,9 @@ import {
   scanIncomingAction
 } from "@/app/actions";
 import { AppShell } from "@/components/app-shell";
+import { DashboardMotion } from "@/components/dashboard-motion";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader
-} from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 import { EpisodeTable } from "@/components/episode-table";
 import { WorkerTaskTable } from "@/components/worker-task-table";
 import { getDashboardData } from "@/lib/db/repositories";
@@ -41,7 +37,7 @@ export default async function HomePage({
 
   return (
     <AppShell>
-      <section className="border-b border-[var(--line)] bg-white/78 backdrop-blur">
+      <section className="border-b border-[var(--line)] bg-[var(--hero)] backdrop-blur">
         <div className="mx-auto flex w-full max-w-7xl flex-col gap-5 px-4 py-6 md:px-6">
           <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
             <div>
@@ -49,7 +45,7 @@ export default async function HomePage({
                 <Activity className="size-3.5 text-[var(--signal)]" />
                 RSS / OpenList / 115 media flow
               </div>
-              <h1 className="text-3xl font-semibold tracking-normal md:text-4xl">
+              <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">
                 运行总览
               </h1>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">
@@ -64,7 +60,7 @@ export default async function HomePage({
                 <select
                   name="subscriptionId"
                   defaultValue={defaultPollTarget}
-                  className="h-9 min-w-[180px] rounded-[var(--radius)] border border-[var(--line)] bg-white px-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
+                  className="h-9 min-w-[180px] rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] px-3 text-sm shadow-[var(--shadow)] focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
                 >
                   {enabledSubscriptions.map((subscription) => (
                     <option key={subscription.id} value={subscription.id}>
@@ -87,45 +83,54 @@ export default async function HomePage({
             </div>
           </div>
 
-          <div className="grid gap-3 md:grid-cols-5">
-            <Stat label="启用订阅" value={data.stats.activeSubscriptions} />
-            <Stat label="进行中" value={data.stats.queuedJobs} />
-            <Stat label="后台任务" value={data.stats.workerTasks} />
-            <Stat label="待处理" value={data.stats.needsReview} />
-            <Stat label="已完成" value={data.stats.completedJobs} />
-          </div>
+          <DashboardMotion
+            stats={[
+              { label: "启用订阅", value: data.stats.activeSubscriptions },
+              { label: "进行中", value: data.stats.queuedJobs },
+              { label: "后台任务", value: data.stats.workerTasks },
+              { label: "待处理", value: data.stats.needsReview },
+              { label: "已完成", value: data.stats.completedJobs }
+            ]}
+          />
         </div>
       </section>
 
-      <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-6">
-        <div className="grid gap-4">
-          <div className="flex flex-col justify-between gap-2 text-xs text-[var(--muted)] md:flex-row md:items-center">
-            <div>
-              最新轮询：
-              <span className="data-digits ml-1">
-                {formatDateTime(
-                  data.subscriptions
-                    .map((item) => item.lastPolledAt)
-                    .filter(Boolean)
-                    .sort()
-                    .at(-1) ?? null
-                )}
-              </span>
-            </div>
-            <div>
-              Worker 心跳：
-              <span className="data-digits ml-1">
-                {formatDateTime(data.workerHealth.lastSeenAt)}
-              </span>
-            </div>
+      <div className="mx-auto grid w-full max-w-7xl gap-4 px-4 py-6 md:px-6">
+        <div className="flex flex-col justify-between gap-2 text-xs text-[var(--muted)] md:flex-row md:items-center">
+          <div>
+            最新轮询：
+            <span className="data-digits ml-1">
+              {formatDateTime(
+                data.subscriptions
+                  .map((item) => item.lastPolledAt)
+                  .filter(Boolean)
+                  .sort()
+                  .at(-1) ?? null
+              )}
+            </span>
           </div>
-          <WorkerHealthNotice health={data.workerHealth} />
-          <EpisodeTable pageData={data.episodePage} />
-          <WorkerTaskTable
-            tasks={data.workerTasks}
-            subscriptions={data.subscriptions}
-          />
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                "inline-flex size-1.5 rounded-full",
+                data.workerHealth.ok
+                  ? "worker-heartbeat bg-[var(--signal)]"
+                  : "bg-[var(--accent)] shadow-[0_0_0_3px_var(--accent-soft)]"
+              )}
+              aria-hidden
+            />
+            Worker 心跳：
+            <span className="data-digits ml-0.5">
+              {formatDateTime(data.workerHealth.lastSeenAt)}
+            </span>
+          </div>
         </div>
+        <WorkerHealthNotice health={data.workerHealth} />
+        <EpisodeTable pageData={data.episodePage} />
+        <WorkerTaskTable
+          tasks={data.workerTasks}
+          subscriptions={data.subscriptions}
+        />
       </div>
     </AppShell>
   );
@@ -152,7 +157,7 @@ function WorkerHealthNotice({ health }: { health: WorkerHealth }) {
   if (health.ok) return null;
 
   return (
-    <div className="flex flex-col gap-2 rounded-[var(--radius)] border border-[#d9770640] bg-[#d9770612] px-3 py-3 text-sm md:flex-row md:items-center md:justify-between">
+    <div className="flex flex-col gap-2 rounded-[var(--radius)] border border-[var(--accent-soft-border)] bg-[var(--accent-soft)] px-3 py-3 text-sm md:flex-row md:items-center md:justify-between">
       <div className="flex min-w-0 items-start gap-2">
         <ServerCrash className="mt-0.5 size-4 shrink-0 text-[var(--accent)]" />
         <div>
@@ -170,21 +175,6 @@ function WorkerHealthNotice({ health }: { health: WorkerHealth }) {
           : "从未心跳"}
       </div>
     </div>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <Card className="overflow-hidden">
-      <CardHeader className="pb-2">
-        <CardDescription>{label}</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <div className="scanline rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] px-3 py-2">
-          <span className="data-digits text-3xl font-semibold">{value}</span>
-        </div>
-      </CardContent>
-    </Card>
   );
 }
 

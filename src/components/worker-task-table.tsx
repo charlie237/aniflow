@@ -101,7 +101,17 @@ export function WorkerTaskTable({
               pageTasks.map((task) => (
                 <TableRow key={task.id}>
                   <TableCell>
-                    <Badge variant={statusVariant(task.status)}>
+                    <Badge
+                      variant={statusVariant(task.status)}
+                      className={
+                        task.status === "running" || task.status === "queued"
+                          ? "status-live"
+                          : undefined
+                      }
+                    >
+                      {task.status === "running" || task.status === "queued" ? (
+                        <span className="status-live-dot" aria-hidden />
+                      ) : null}
                       {taskStatusLabels[task.status]}
                     </Badge>
                   </TableCell>
@@ -190,7 +200,7 @@ function WorkerTaskDetails({
           </div>
           <div>
             <div className="mb-2 text-sm font-medium">Payload</div>
-            <pre className="max-h-[320px] overflow-auto rounded-[var(--radius)] border border-[var(--line)] bg-[#101418] p-3 text-xs text-white">
+            <pre className="max-h-[320px] overflow-auto rounded-[var(--radius)] border border-[var(--line)] bg-[var(--code-bg)] p-3 text-xs text-[var(--code-fg)]">
               {prettyJson(task.payloadJson)}
             </pre>
           </div>

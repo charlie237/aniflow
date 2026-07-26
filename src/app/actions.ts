@@ -35,6 +35,7 @@ import {
   ensureOpenListDirectory,
   type OpenList115CheckResult
 } from "@/lib/openlist/client";
+import { RUNTIME_RESET_CONFIRM_PHRASE } from "@/lib/runtime-reset";
 import { toBool } from "@/lib/utils";
 import { isMikanDownloadUrl, isMikanRssUrl } from "@/lib/net/url-policy";
 import {
@@ -488,7 +489,8 @@ export async function check115ConnectivityAction(formData: FormData) {
 }
 
 export async function resetRuntimeDataAction(formData: FormData) {
-  if (!toBool(formData.get("confirmRuntimeReset"))) {
+  const typed = String(formData.get("confirmRuntimeReset") ?? "").trim();
+  if (typed !== RUNTIME_RESET_CONFIRM_PHRASE) {
     redirect("/settings?reset=confirm");
   }
 

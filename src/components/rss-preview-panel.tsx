@@ -62,7 +62,7 @@ export function RssPreviewPanel({
         </form>
 
         {error ? (
-          <div className="rounded-[var(--radius)] border border-[#d92d2040] bg-[#d92d2012] p-3 text-sm text-[var(--danger)]">
+          <div className="rounded-[var(--radius)] border border-[var(--danger-soft-border)] bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger-text)]">
             {error}
           </div>
         ) : null}

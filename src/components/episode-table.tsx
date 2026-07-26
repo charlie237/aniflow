@@ -52,6 +52,7 @@ import {
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
 import {
+  cn,
   formatDateTime,
   formatFileSize
 } from "@/lib/utils";
@@ -186,17 +187,18 @@ export function EpisodeTable({
       <CardContent className="grid gap-3">
         <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap gap-2">
-          <div className="flex h-9 overflow-hidden rounded-[var(--radius)] border border-[var(--line)] bg-white">
+          <div className="flex h-9 overflow-hidden rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)]">
             <button
               type="button"
               onClick={() =>
                 updateEpisodeParams({ subscriptionState: "active" })
               }
-              className={`inline-flex items-center gap-1.5 px-3 text-sm font-medium transition-colors ${
+              className={cn(
+                "inline-flex items-center gap-1.5 px-3 text-sm font-medium transition-colors",
                 subscriptionState === "active"
                   ? "bg-[var(--signal)] text-[var(--signal-foreground)]"
                   : "text-[var(--muted)] hover:bg-[var(--panel-strong)]"
-              }`}
+              )}
             >
               <RadioTower className="size-4" />
               追更中
@@ -209,11 +211,12 @@ export function EpisodeTable({
               onClick={() =>
                 updateEpisodeParams({ subscriptionState: "archived" })
               }
-              className={`inline-flex items-center gap-1.5 border-l border-[var(--line)] px-3 text-sm font-medium transition-colors ${
+              className={cn(
+                "inline-flex items-center gap-1.5 border-l border-[var(--line)] px-3 text-sm font-medium transition-colors",
                 subscriptionState === "archived"
-                  ? "bg-[var(--foreground)] text-white"
+                  ? "bg-[var(--panel-strong)] text-[var(--foreground)] ring-1 ring-inset ring-[var(--line-strong)]"
                   : "text-[var(--muted)] hover:bg-[var(--panel-strong)]"
-              }`}
+              )}
             >
               <Archive className="size-4" />
               已归档
@@ -225,7 +228,7 @@ export function EpisodeTable({
           <select
             value={scopeValue}
             onChange={(event) => updateEpisodeScope(event.target.value)}
-            className="h-9 min-w-[220px] rounded-[var(--radius)] border border-[var(--line)] bg-white px-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
+            className="h-9 min-w-[220px] rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] px-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
           >
             <option value="all">
               {subscriptionState === "active"
@@ -417,7 +420,7 @@ function ManualSupplementDialog({
               name="subscriptionId"
               defaultValue={defaultSubscriptionId}
               required
-              className="flex h-9 w-full rounded-[var(--radius)] border border-[var(--line)] bg-white px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
+              className="flex h-9 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
             >
               {pageData.manualSubscriptionOptions.map((subscription) => (
                 <option key={subscription.id} value={subscription.id}>

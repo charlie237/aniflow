@@ -9,15 +9,15 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "bg-[var(--foreground)] text-white hover:bg-black",
+          "bg-[var(--ink)] text-[var(--ink-foreground)] hover:opacity-90",
         signal:
-          "bg-[var(--signal)] text-[var(--signal-foreground)] hover:bg-[#007d5c]",
+          "bg-[var(--signal)] text-[var(--signal-foreground)] hover:bg-[var(--signal-hover)]",
         outline:
-          "border-[var(--line)] bg-white text-[var(--foreground)] hover:bg-[var(--panel-strong)]",
+          "border-[var(--line)] bg-[var(--panel)] text-[var(--foreground)] hover:bg-[var(--panel-strong)]",
         ghost:
           "text-[var(--foreground)] hover:bg-[var(--panel-strong)]",
         danger:
-          "bg-[var(--danger)] text-white hover:bg-[#bf271d]"
+          "bg-[var(--danger)] text-white hover:bg-[var(--danger-hover)]"
       },
       size: {
         default: "h-9 px-3",
