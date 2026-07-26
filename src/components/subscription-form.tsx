@@ -1,11 +1,22 @@
 "use client";
 
-import { Pencil, Plus, Save, Trash2, X } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  ChevronDown,
+  Pencil,
+  Plus,
+  Save,
+  Trash2,
+  X
+} from "lucide-react";
 import type { ChangeEvent, InputHTMLAttributes } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
+  archiveSubscriptionAction,
   createParsedSubscriptionAction,
   deleteSubscriptionAction,
+  restoreSubscriptionAction,
   updateParsedSubscriptionAction
 } from "@/app/actions";
 import { Badge } from "@/components/ui/badge";
@@ -271,90 +282,158 @@ function ExistingSubscriptions({
   rules: FilterRule[];
 }) {
   const [editingId, setEditingId] = useState<number | null>(null);
+  const activeSubscriptions = subscriptions.filter(
+    (subscription) => subscription.enabled
+  );
+  const archivedSubscriptions = subscriptions.filter(
+    (subscription) => !subscription.enabled
+  );
 
   return (
-    <div className="grid gap-3">
-      <div className="text-sm font-medium">已有订阅</div>
-      {subscriptions.length === 0 ? (
+    <div className="grid gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-medium">追更中</div>
+        <Badge variant="muted">{activeSubscriptions.length}</Badge>
+      </div>
+      {activeSubscriptions.length === 0 ? (
         <div className="rounded-[var(--radius)] border border-dashed border-[var(--line)] p-4 text-sm text-[var(--muted)]">
-          暂无订阅。
+          暂无追更中的订阅。
         </div>
       ) : (
-        subscriptions.map((subscription) => {
-          const subscriptionRules = rules.filter(
-            (rule) => rule.subscriptionId === subscription.id
-          );
-          const isEditing = editingId === subscription.id;
-
-          return (
-            <div
-              key={subscription.id}
-              className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-white p-3 text-sm"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="font-medium">{subscription.name}</div>
-                  <div className="mt-1 truncate text-xs text-[var(--muted)]">
-                    {subscription.rssUrl}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="rounded-[6px] border border-[var(--line)] px-2 py-1 data-digits text-xs">
-                    Season {String(subscription.seasonNumber).padStart(2, "0")}
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setEditingId(isEditing ? null : subscription.id)}
-                  >
-                    {isEditing ? (
-                      <X className="size-4" />
-                    ) : (
-                      <Pencil className="size-4" />
-                    )}
-                    {isEditing ? "收起" : "编辑"}
-                  </Button>
-                  <form
-                    action={deleteSubscriptionAction}
-                    onSubmit={(event) => {
-                      const form = event.currentTarget;
-                      const cleanupIncoming = new FormData(form).has("cleanupIncoming");
-                      const message = cleanupIncoming
-                        ? `删除订阅「${subscription.name}」，并清理下载目录中可明确匹配的残留文件？媒体库文件不会被删除。`
-                        : `删除订阅「${subscription.name}」？`;
-                      if (!window.confirm(message)) {
-                        event.preventDefault();
-                      }
-                    }}
-                    className="flex flex-wrap items-center gap-2"
-                  >
-                    <input type="hidden" name="id" value={subscription.id} />
-                    <label className="flex items-center gap-1 text-xs text-[var(--muted)]">
-                      <input type="checkbox" name="cleanupIncoming" value="1" />
-                      清下载残留
-                    </label>
-                    <Button type="submit" variant="danger" size="sm">
-                      <Trash2 className="size-4" />
-                      删除
-                    </Button>
-                  </form>
-                </div>
-              </div>
-              <SubscriptionSummary
-                subscription={subscription}
-                rules={subscriptionRules}
-              />
-              {isEditing ? (
-                <EditSubscriptionForm
-                  subscription={subscription}
-                  rules={subscriptionRules}
-                />
-              ) : null}
-            </div>
-          );
-        })
+        <SubscriptionGroup
+          subscriptions={activeSubscriptions}
+          rules={rules}
+          editingId={editingId}
+          onToggleEdit={(id) =>
+            setEditingId((current) => (current === id ? null : id))
+          }
+        />
       )}
+
+      {archivedSubscriptions.length > 0 ? (
+        <details className="group border-t border-[var(--line)] pt-4">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-medium [&::-webkit-details-marker]:hidden">
+            <span className="flex items-center gap-2">
+              已归档
+              <Badge variant="muted">{archivedSubscriptions.length}</Badge>
+            </span>
+            <ChevronDown className="size-4 text-[var(--muted)] transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="mt-3">
+            <SubscriptionGroup
+              subscriptions={archivedSubscriptions}
+              rules={rules}
+              editingId={editingId}
+              onToggleEdit={(id) =>
+                setEditingId((current) => (current === id ? null : id))
+              }
+            />
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function SubscriptionGroup({
+  subscriptions,
+  rules,
+  editingId,
+  onToggleEdit
+}: {
+  subscriptions: Subscription[];
+  rules: FilterRule[];
+  editingId: number | null;
+  onToggleEdit: (id: number) => void;
+}) {
+  return (
+    <div className="grid gap-3">
+      {subscriptions.map((subscription) => (
+        <SubscriptionItem
+          key={subscription.id}
+          subscription={subscription}
+          rules={rules.filter((rule) => rule.subscriptionId === subscription.id)}
+          isEditing={editingId === subscription.id}
+          onToggleEdit={() => onToggleEdit(subscription.id)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SubscriptionItem({
+  subscription,
+  rules,
+  isEditing,
+  onToggleEdit
+}: {
+  subscription: Subscription;
+  rules: FilterRule[];
+  isEditing: boolean;
+  onToggleEdit: () => void;
+}) {
+  return (
+    <div className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-white p-3 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="font-medium">{subscription.name}</div>
+          <div className="mt-1 truncate text-xs text-[var(--muted)]">
+            {subscription.rssUrl}
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="rounded-[6px] border border-[var(--line)] px-2 py-1 data-digits text-xs">
+            Season {String(subscription.seasonNumber).padStart(2, "0")}
+          </div>
+          <Button type="button" variant="outline" size="sm" onClick={onToggleEdit}>
+            {isEditing ? <X /> : <Pencil />}
+            {isEditing ? "收起" : "编辑"}
+          </Button>
+          <form
+            action={
+              subscription.enabled
+                ? archiveSubscriptionAction
+                : restoreSubscriptionAction
+            }
+          >
+            <input type="hidden" name="id" value={subscription.id} />
+            <Button
+              type="submit"
+              variant={subscription.enabled ? "outline" : "signal"}
+              size="sm"
+            >
+              {subscription.enabled ? <Archive /> : <ArchiveRestore />}
+              {subscription.enabled ? "归档" : "恢复追更"}
+            </Button>
+          </form>
+          <form
+            action={deleteSubscriptionAction}
+            onSubmit={(event) => {
+              const form = event.currentTarget;
+              const cleanupIncoming = new FormData(form).has("cleanupIncoming");
+              const message = cleanupIncoming
+                ? `删除订阅「${subscription.name}」，并清理下载目录中可明确匹配的残留文件？媒体库文件不会被删除。`
+                : `删除订阅「${subscription.name}」？`;
+              if (!window.confirm(message)) event.preventDefault();
+            }}
+            className="flex flex-wrap items-center gap-2"
+          >
+            <input type="hidden" name="id" value={subscription.id} />
+            <label className="flex items-center gap-1 text-xs text-[var(--muted)]">
+              <input type="checkbox" name="cleanupIncoming" value="1" />
+              清下载残留
+            </label>
+            <Button type="submit" variant="danger" size="sm">
+              <Trash2 />
+              删除
+            </Button>
+          </form>
+        </div>
+      </div>
+      <SubscriptionSummary subscription={subscription} rules={rules} />
+      {isEditing ? (
+        <EditSubscriptionForm subscription={subscription} rules={rules} />
+      ) : null}
     </div>
   );
 }
@@ -368,7 +447,7 @@ function SubscriptionSummary({
 }) {
   return (
     <div className="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-      <span>{subscription.enabled ? "启用" : "停用"}</span>
+      <span>{subscription.enabled ? "追更中" : "已归档"}</span>
       <span>{subscription.autoDownload ? "自动离线" : "仅发现"}</span>
       <span className="data-digits">
         {subscription.incomingPath?.trim() || "按订阅名自动拆分下载目录"}
@@ -452,15 +531,6 @@ function EditSubscriptionForm({
         />
       </div>
       <div className="flex flex-wrap items-center gap-4 text-sm">
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            name="enabled"
-            value="1"
-            defaultChecked={subscription.enabled}
-          />
-          启用
-        </label>
         <label className="flex items-center gap-2">
           <input
             type="checkbox"

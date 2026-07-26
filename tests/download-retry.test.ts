@@ -9,6 +9,7 @@ process.env.DATABASE_PATH = dbPath;
 
 const { getSqlite } = await import("@/lib/db/client");
 const {
+  archiveSubscription,
   claimQueuedJob,
   createOrUpdateJob,
   createSubscription,
@@ -19,6 +20,7 @@ const {
   getLibraryEpisodeState,
   getSubscription,
   requeueFailedDownloadJobs,
+  restoreSubscription,
   saveSystemSettings,
   getSystemSettings,
   upsertEpisodeFile,
@@ -179,6 +181,74 @@ describe("requeueFailedDownloadJobs", () => {
     const current = getSystemSettings();
     saveSystemSettings({ ...current, downloadAutoRetryEnabled: false });
     expect(requeueFailedDownloadJobs()).toBe(0);
+  });
+
+  it("archives a subscription, pauses queued jobs, and preserves in-flight work", () => {
+    const sub = createSubscription({
+      name: "Finished Show",
+      rssUrl: "https://example.com/rss-archive",
+      seasonNumber: 1,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+
+    const queuedFeed = upsertFeedItem(sub, {
+      guid: "archive-queued",
+      title: "[G] Finished Show - 01 [1080p][CHS].mkv",
+      downloadUrl: "magnet:?xt=urn:btih:archive-queued",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Finished Show",
+        episodeNumber: 1,
+        episodeText: "01",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 80,
+        needsReview: false
+      }
+    });
+    const downloadingFeed = upsertFeedItem(sub, {
+      guid: "archive-downloading",
+      title: "[G] Finished Show - 02 [1080p][CHS].mkv",
+      downloadUrl: "magnet:?xt=urn:btih:archive-downloading",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Finished Show",
+        episodeNumber: 2,
+        episodeText: "02",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 80,
+        needsReview: false
+      }
+    });
+    const queued = createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: queuedFeed.id,
+      status: "queued",
+      sourceUrl: "magnet:?xt=urn:btih:archive-queued"
+    });
+    const downloading = createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: downloadingFeed.id,
+      status: "downloading",
+      sourceUrl: "magnet:?xt=urn:btih:archive-downloading"
+    });
+    if (!queued || !downloading) return;
+
+    const archived = archiveSubscription(sub.id);
+    expect(archived.subscription?.enabled).toBe(false);
+    expect(archived.pausedJobs).toBe(1);
+    expect(getJob(queued.id)?.status).toBe("discovered");
+    expect(getJob(downloading.id)?.status).toBe("downloading");
+
+    expect(restoreSubscription(sub.id)?.enabled).toBe(true);
   });
 
   it("does not requeue failed jobs for a disabled subscription", () => {

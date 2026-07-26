@@ -9,6 +9,7 @@ import type {
   DashboardEpisodePage,
   DashboardEpisodeRow,
   EpisodeStatusFilter,
+  SubscriptionStateFilter,
   Subscription
 } from "@/lib/db/types";
 
@@ -16,6 +17,7 @@ export interface EpisodePageQuery {
   subscriptionId: number | null;
   season: number | null;
   status: EpisodeStatusFilter;
+  subscriptionState: SubscriptionStateFilter;
   page: number;
   pageSize: number;
 }
@@ -28,7 +30,11 @@ export function queryDashboardEpisodePage(
   query: EpisodePageQuery,
   subscriptions: Subscription[]
 ): DashboardEpisodePage {
-  const subscriptionOptions = subscriptions.map((subscription) => ({
+  const scopedSubscriptions = subscriptions.filter(
+    (subscription) =>
+      subscription.enabled === (query.subscriptionState === "active")
+  );
+  const subscriptionOptions = scopedSubscriptions.map((subscription) => ({
     id: subscription.id,
     name: subscription.name,
     seasonNumber: subscription.seasonNumber
@@ -42,7 +48,7 @@ export function queryDashboardEpisodePage(
       : null;
   const seasonOptions = Array.from(
     new Set(
-      subscriptions
+      scopedSubscriptions
         .filter(
           (subscription) =>
             validSubscriptionId == null || subscription.id === validSubscriptionId
@@ -59,7 +65,8 @@ export function queryDashboardEpisodePage(
 
   const bind = {
     subscriptionId: validSubscriptionId,
-    season: validSeason
+    season: validSeason,
+    subscriptionEnabled: query.subscriptionState === "active" ? 1 : 0
   };
 
   const counts = {
@@ -86,21 +93,32 @@ export function queryDashboardEpisodePage(
     filters: {
       subscriptionId: validSubscriptionId,
       season: validSeason,
-      status: query.status
+      status: query.status,
+      subscriptionState: query.subscriptionState
     },
     counts,
+    subscriptionCounts: {
+      active: subscriptions.filter((subscription) => subscription.enabled).length,
+      archived: subscriptions.filter((subscription) => !subscription.enabled).length
+    },
     subscriptionOptions,
-    manualSubscriptionOptions: subscriptions.map((subscription) => ({
-      id: subscription.id,
-      name: subscription.name,
-      seasonNumber: subscription.seasonNumber
-    })),
+    manualSubscriptionOptions: subscriptions
+      .filter((subscription) => subscription.enabled)
+      .map((subscription) => ({
+        id: subscription.id,
+        name: subscription.name,
+        seasonNumber: subscription.seasonNumber
+      })),
     seasonOptions
   };
 }
 
 function countEpisodes(
-  bind: { subscriptionId: number | null; season: number | null },
+  bind: {
+    subscriptionId: number | null;
+    season: number | null;
+    subscriptionEnabled: number;
+  },
   status: EpisodeStatusFilter
 ) {
   const sql = `
@@ -113,7 +131,11 @@ function countEpisodes(
 }
 
 function listEpisodeRows(
-  bind: { subscriptionId: number | null; season: number | null },
+  bind: {
+    subscriptionId: number | null;
+    season: number | null;
+    subscriptionEnabled: number;
+  },
   status: EpisodeStatusFilter,
   limit: number,
   offset: number
@@ -212,6 +234,7 @@ function preferredEpisodeSql() {
       )
       WHERE (@subscriptionId IS NULL OR f.subscription_id = @subscriptionId)
         AND (@season IS NULL OR s.season_number = @season)
+        AND s.enabled = @subscriptionEnabled
         AND ${ruleFilterSql("f", "m")}
 
       UNION ALL
@@ -269,6 +292,7 @@ function preferredEpisodeSql() {
         AND ef.episode_number IS NOT NULL
         AND (@subscriptionId IS NULL OR ef.subscription_id = @subscriptionId)
         AND (@season IS NULL OR s.season_number = @season)
+        AND s.enabled = @subscriptionEnabled
         AND NOT EXISTS (
           SELECT 1
           FROM feed_items f2

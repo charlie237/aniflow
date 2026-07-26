@@ -258,6 +258,65 @@ describe("dashboard SQL pagination", () => {
     ]);
     expect(getLibraryEpisodeState(sub.id, 1)).toBeNull();
   });
+
+  it("shows active subscriptions by default and archived subscriptions on demand", () => {
+    const active = createSubscription({
+      name: "Active Show",
+      rssUrl: "https://example.com/rss-active",
+      destinationRoot: "/115/Anime"
+    });
+    const archived = createSubscription({
+      name: "Archived Show",
+      rssUrl: "https://example.com/rss-archived",
+      destinationRoot: "/115/Anime",
+      enabled: false
+    });
+    if (!active || !archived) return;
+
+    for (const [subscription, guid] of [
+      [active, "active-1"],
+      [archived, "archived-1"]
+    ] as const) {
+      upsertFeedItem(subscription, {
+        guid,
+        title: `[G] ${subscription.name} - 01 [1080p][CHS].mkv`,
+        downloadUrl: `https://example.com/${guid}.torrent`,
+        metadata: {
+          releaseGroup: "G",
+          parsedTitle: subscription.name,
+          episodeNumber: 1,
+          episodeText: "01",
+          releaseRevision: 1,
+          resolution: "1080p",
+          subtitleLanguage: "CHS",
+          container: "mkv",
+          tags: [],
+          parseConfidence: 90,
+          needsReview: false
+        }
+      });
+    }
+
+    const activePage = getDashboardEpisodePage({ episodePageSize: "10" });
+    expect(activePage.total).toBe(1);
+    expect(activePage.rows[0]?.subscriptionName).toBe("Active Show");
+    expect(activePage.filters.subscriptionState).toBe("active");
+    expect(activePage.subscriptionCounts).toEqual({ active: 1, archived: 1 });
+    expect(activePage.manualSubscriptionOptions.map((item) => item.id)).toEqual([
+      active.id
+    ]);
+
+    const archivedPage = getDashboardEpisodePage({
+      episodeSubscriptionState: "archived",
+      episodePageSize: "10"
+    });
+    expect(archivedPage.total).toBe(1);
+    expect(archivedPage.rows[0]?.subscriptionName).toBe("Archived Show");
+    expect(archivedPage.filters.subscriptionState).toBe("archived");
+    expect(archivedPage.subscriptionOptions.map((item) => item.id)).toEqual([
+      archived.id
+    ]);
+  });
 });
 
 // Prevent unused import lint noise if vi is needed for future stubs

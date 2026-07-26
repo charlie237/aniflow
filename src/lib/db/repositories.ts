@@ -40,6 +40,7 @@ import type {
   ReleaseMetadata,
   RuleType,
   Subscription,
+  SubscriptionStateFilter,
   SystemSettings,
   WorkerHealth,
   WorkerTask,
@@ -149,6 +150,47 @@ export function updateSubscription(id: number, input: SubscriptionInput) {
       destinationRoot: values.destinationRoot,
       incomingPath: values.incomingPath,
       tmdbSeriesId: values.tmdbSeriesId,
+      updatedAt: sql`CURRENT_TIMESTAMP`
+    })
+    .where(eq(subscriptions.id, id))
+    .run();
+  return getSubscription(id);
+}
+
+export function archiveSubscription(id: number) {
+  const changes = getDb().transaction((tx) => {
+    const subscriptionChanges = tx
+      .update(subscriptions)
+      .set({
+        enabled: 0,
+        updatedAt: sql`CURRENT_TIMESTAMP`
+      })
+      .where(eq(subscriptions.id, id))
+      .run().changes;
+    const pausedJobs = tx
+      .update(downloadJobs)
+      .set({
+        status: "discovered",
+        errorMessage: "Subscription is archived; download submission paused",
+        updatedAt: sql`CURRENT_TIMESTAMP`
+      })
+      .where(
+        and(
+          eq(downloadJobs.subscriptionId, id),
+          eq(downloadJobs.status, "queued")
+        )
+      )
+      .run().changes;
+    return { subscriptionChanges, pausedJobs };
+  });
+  return { subscription: getSubscription(id), ...changes };
+}
+
+export function restoreSubscription(id: number) {
+  getDb()
+    .update(subscriptions)
+    .set({
+      enabled: 1,
       updatedAt: sql`CURRENT_TIMESTAMP`
     })
     .where(eq(subscriptions.id, id))
@@ -1393,6 +1435,7 @@ export function resetRuntimeData() {
 
 export interface DashboardQueryInput {
   episodeSubscriptionId?: string;
+  episodeSubscriptionState?: string;
   episodeSeason?: string;
   episodeStatus?: string;
   episodePage?: string;
@@ -1429,11 +1472,18 @@ export function getDashboardEpisodePage(
 function normalizeEpisodeQuery(input: DashboardQueryInput) {
   return {
     subscriptionId: positiveNumberOrNull(input.episodeSubscriptionId),
+    subscriptionState: normalizeSubscriptionState(input.episodeSubscriptionState),
     season: positiveNumberOrNull(input.episodeSeason),
     status: normalizeEpisodeStatus(input.episodeStatus),
     page: Math.max(1, Number(input.episodePage) || 1),
     pageSize: normalizeEpisodePageSize(input.episodePageSize)
   };
+}
+
+function normalizeSubscriptionState(
+  value: string | undefined
+): SubscriptionStateFilter {
+  return value === "archived" ? "archived" : "active";
 }
 
 function positiveNumberOrNull(value: string | undefined) {

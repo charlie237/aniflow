@@ -136,6 +136,7 @@ function toDashboardQuery(
 ): DashboardQueryInput {
   return {
     episodeSubscriptionId: firstParam(params.episodeSubscriptionId),
+    episodeSubscriptionState: firstParam(params.episodeSubscriptionState),
     episodeSeason: firstParam(params.episodeSeason),
     episodeStatus: firstParam(params.episodeStatus),
     episodePage: firstParam(params.episodePage),

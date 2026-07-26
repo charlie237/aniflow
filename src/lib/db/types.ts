@@ -32,6 +32,8 @@ export type EpisodeStatusFilter =
   | "failed"
   | "waiting";
 
+export type SubscriptionStateFilter = "active" | "archived";
+
 export interface Subscription {
   id: number;
   name: string;
@@ -159,8 +161,10 @@ export interface DashboardEpisodePage {
     subscriptionId: number | null;
     season: number | null;
     status: EpisodeStatusFilter;
+    subscriptionState: SubscriptionStateFilter;
   };
   counts: Record<EpisodeStatusFilter, number>;
+  subscriptionCounts: Record<SubscriptionStateFilter, number>;
   subscriptionOptions: Array<{
     id: number;
     name: string;

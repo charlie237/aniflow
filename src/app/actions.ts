@@ -6,6 +6,7 @@ import { z } from "zod";
 import { redirect } from "next/navigation";
 import {
   addRule,
+  archiveSubscription,
   createOrUpdateJob,
   createSubscription,
   deleteRule,
@@ -15,6 +16,7 @@ import {
   getSubscription,
   listRules,
   replaceSubscriptionAllowRules,
+  restoreSubscription,
   resetRuntimeData,
   saveSystemSettings,
   updateSubscription,
@@ -73,8 +75,7 @@ const parsedSubscriptionSchema = z.object({
 });
 
 const editableSubscriptionSchema = parsedSubscriptionSchema.extend({
-  id: z.coerce.number().int().positive(),
-  enabled: z.boolean()
+  id: z.coerce.number().int().positive()
 });
 
 const ruleSchema = z.object({
@@ -215,14 +216,13 @@ export async function updateParsedSubscriptionAction(formData: FormData) {
     subtitleLanguage: optionalFormString(formData.get("subtitleLanguage")),
     seasonNumber: formData.get("seasonNumber") ?? 1,
     incomingPath: optionalFormString(formData.get("incomingPath")),
-    enabled: toBool(formData.get("enabled")),
     autoDownload: toBool(formData.get("autoDownload"))
   });
 
   updateSubscription(parsed.id, {
     name: parsed.name,
     rssUrl: parsed.rssUrl,
-    enabled: parsed.enabled,
+    enabled: existing.enabled,
     autoDownload: parsed.autoDownload,
     seasonNumber: parsed.seasonNumber,
     destinationRoot: existing.destinationRoot || settings.mediaLibraryRoot,
@@ -242,6 +242,25 @@ export async function updateParsedSubscriptionAction(formData: FormData) {
     { type: "language_allow", value: parsed.subtitleLanguage }
   ]);
 
+  revalidatePath("/");
+  revalidatePath("/subscriptions");
+}
+
+export async function archiveSubscriptionAction(formData: FormData) {
+  const id = Number(formData.get("id"));
+  if (!Number.isInteger(id) || id <= 0) return;
+  archiveSubscription(id);
+  revalidatePath("/");
+  revalidatePath("/subscriptions");
+}
+
+export async function restoreSubscriptionAction(formData: FormData) {
+  const id = Number(formData.get("id"));
+  if (!Number.isInteger(id) || id <= 0) return;
+  const subscription = restoreSubscription(id);
+  if (subscription) {
+    enqueueAndKickWorkerTask("poll_subscription", subscription.id);
+  }
   revalidatePath("/");
   revalidatePath("/subscriptions");
 }

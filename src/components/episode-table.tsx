@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
+  Archive,
   CheckCircle2,
   Eye,
   FileVideo,
@@ -12,6 +13,7 @@ import {
   Plus,
   RotateCcw,
   Rss,
+  RadioTower,
   X
 } from "lucide-react";
 import {
@@ -73,8 +75,10 @@ export function EpisodeTable({
       ? "all"
       : `${pageData.filters.subscriptionId}:${pageData.filters.season ?? ""}`;
   const statusValue = pageData.filters.status;
+  const subscriptionState = pageData.filters.subscriptionState;
   const hasExplicitFilters = [
     "episodeSubscriptionId",
+    "episodeSubscriptionState",
     "episodeSeason",
     "episodeStatus",
     "episodePage"
@@ -94,6 +98,7 @@ export function EpisodeTable({
   function updateEpisodeParams(
     updates: Partial<{
       subscriptionId: string;
+      subscriptionState: "active" | "archived";
       season: string;
       status: EpisodeStatusFilter;
       page: number;
@@ -104,6 +109,17 @@ export function EpisodeTable({
 
     if (updates.subscriptionId !== undefined) {
       setOrDelete(params, "episodeSubscriptionId", updates.subscriptionId, "all");
+      params.delete("episodePage");
+    }
+    if (updates.subscriptionState !== undefined) {
+      setOrDelete(
+        params,
+        "episodeSubscriptionState",
+        updates.subscriptionState,
+        "active"
+      );
+      params.delete("episodeSubscriptionId");
+      params.delete("episodeSeason");
       params.delete("episodePage");
     }
     if (updates.season !== undefined) {
@@ -145,6 +161,7 @@ export function EpisodeTable({
     const params = new URLSearchParams(searchParams.toString());
     for (const key of [
       "episodeSubscriptionId",
+      "episodeSubscriptionState",
       "episodeSeason",
       "episodeStatus",
       "episodePage"
@@ -169,12 +186,52 @@ export function EpisodeTable({
       <CardContent className="grid gap-3">
         <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex flex-wrap gap-2">
+          <div className="flex h-9 overflow-hidden rounded-[var(--radius)] border border-[var(--line)] bg-white">
+            <button
+              type="button"
+              onClick={() =>
+                updateEpisodeParams({ subscriptionState: "active" })
+              }
+              className={`inline-flex items-center gap-1.5 px-3 text-sm font-medium transition-colors ${
+                subscriptionState === "active"
+                  ? "bg-[var(--signal)] text-[var(--signal-foreground)]"
+                  : "text-[var(--muted)] hover:bg-[var(--panel-strong)]"
+              }`}
+            >
+              <RadioTower className="size-4" />
+              追更中
+              <span className="data-digits text-xs opacity-70">
+                {pageData.subscriptionCounts.active}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                updateEpisodeParams({ subscriptionState: "archived" })
+              }
+              className={`inline-flex items-center gap-1.5 border-l border-[var(--line)] px-3 text-sm font-medium transition-colors ${
+                subscriptionState === "archived"
+                  ? "bg-[var(--foreground)] text-white"
+                  : "text-[var(--muted)] hover:bg-[var(--panel-strong)]"
+              }`}
+            >
+              <Archive className="size-4" />
+              已归档
+              <span className="data-digits text-xs opacity-70">
+                {pageData.subscriptionCounts.archived}
+              </span>
+            </button>
+          </div>
           <select
             value={scopeValue}
             onChange={(event) => updateEpisodeScope(event.target.value)}
             className="h-9 min-w-[220px] rounded-[var(--radius)] border border-[var(--line)] bg-white px-3 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
           >
-            <option value="all">全部 Episode</option>
+            <option value="all">
+              {subscriptionState === "active"
+                ? "全部追更 Episode"
+                : "全部归档 Episode"}
+            </option>
             {pageData.subscriptionOptions.map((subscription) => (
               <option
                 key={`${subscription.id}:${subscription.seasonNumber}`}
