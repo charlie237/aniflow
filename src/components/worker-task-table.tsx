@@ -37,8 +37,8 @@ import type {
 } from "@/lib/db/types";
 
 const taskTypeLabels: Record<WorkerTaskType, string> = {
-  poll_all: "全部轮询",
-  poll_subscription: "订阅轮询",
+  poll_all: "全部同步并轮询",
+  poll_subscription: "订阅同步并轮询",
   cleanup_subscription_incoming: "清下载残留",
   scan_incoming: "扫描整理",
   submit_queued: "提交下载"
@@ -77,7 +77,7 @@ export function WorkerTaskTable({
           <ListChecks className="size-4 text-[var(--signal)]" />
           后台队列
         </CardTitle>
-        <CardDescription>轮询、提交和扫描整理会先进入队列。</CardDescription>
+        <CardDescription>媒体库同步、RSS 轮询和文件整理会先进入队列。</CardDescription>
       </CardHeader>
       <CardContent>
         <Table>

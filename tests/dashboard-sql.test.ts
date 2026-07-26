@@ -14,6 +14,8 @@ const {
   createOrUpdateJob,
   createSubscription,
   getDashboardEpisodePage,
+  getLibraryEpisodeState,
+  syncLibraryEpisodeInventory,
   upsertFeedItem
 } = await import("@/lib/db/repositories");
 
@@ -182,6 +184,79 @@ describe("dashboard SQL pagination", () => {
     expect(page1.pageCount).toBe(1);
     expect(page1.rows).toHaveLength(5);
     expect(page1.total).toBe(5);
+  });
+
+  it("shows scanned library episodes without RSS and merges RSS later", () => {
+    const sub = createSubscription({
+      name: "Frieren",
+      rssUrl: "https://example.com/rss-library-sync",
+      seasonNumber: 2,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+
+    const root = "/115/Anime/Frieren/Season 02";
+    syncLibraryEpisodeInventory(sub.id, root, [
+      {
+        path: `${root}/Frieren - S02E01.mkv`,
+        episodeNumber: 1,
+        sizeBytes: 100
+      },
+      {
+        path: `${root}/Frieren - S02E02.mkv`,
+        episodeNumber: 2,
+        sizeBytes: 200
+      }
+    ]);
+
+    expect(getLibraryEpisodeState(sub.id, 1)).toMatchObject({
+      knownRevision: null,
+      fileCount: 1
+    });
+
+    let page = getDashboardEpisodePage({
+      episodeSubscriptionId: String(sub.id),
+      episodePageSize: "10"
+    });
+    expect(page.total).toBe(2);
+    expect(page.rows.every((row) => row.item == null)).toBe(true);
+    expect(page.rows.map((row) => row.episodeNumber).sort()).toEqual([1, 2]);
+
+    upsertFeedItem(sub, {
+      guid: "frieren-s2-e2",
+      title: "[Group] Frieren S2 - 02 [1080p][CHS].mkv",
+      downloadUrl: "https://example.com/frieren-s2-e2.torrent",
+      metadata: {
+        releaseGroup: "Group",
+        parsedTitle: "Frieren S2",
+        episodeNumber: 2,
+        episodeText: "02",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 90,
+        needsReview: false
+      }
+    });
+
+    page = getDashboardEpisodePage({
+      episodeSubscriptionId: String(sub.id),
+      episodePageSize: "10"
+    });
+    expect(page.total).toBe(2);
+    expect(page.rows.find((row) => row.episodeNumber === 2)?.item).not.toBeNull();
+    expect(page.rows.find((row) => row.episodeNumber === 2)?.files).toHaveLength(1);
+
+    syncLibraryEpisodeInventory(sub.id, root, [
+      {
+        path: `${root}/Frieren - S02E02.mkv`,
+        episodeNumber: 2,
+        sizeBytes: 200
+      }
+    ]);
+    expect(getLibraryEpisodeState(sub.id, 1)).toBeNull();
   });
 });
 

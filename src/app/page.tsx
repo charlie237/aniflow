@@ -75,7 +75,7 @@ export default async function HomePage({
                 </select>
                 <Button variant="signal">
                   <RotateCw className="size-4" />
-                  轮询并提交
+                  同步并轮询
                 </Button>
               </form>
               <form action={scanIncomingAction}>

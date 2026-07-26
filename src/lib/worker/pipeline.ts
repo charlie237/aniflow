@@ -15,6 +15,7 @@ import {
   getFeedItem,
   getJob,
   getJobForFeedItem,
+  getLibraryEpisodeState,
   getMetadataForFeedItem,
   getHighestReleaseRevisionForVariant,
   getLibraryFileRevisionAtPath,
@@ -31,6 +32,7 @@ import {
   refreshWorkerLease,
   releaseWorkerLease,
   requeueFailedDownloadJobs,
+  syncLibraryEpisodeInventory,
   touchDownloadingJobActivity,
   touchSubscriptionPolled,
   updateJobStatus,
@@ -60,6 +62,8 @@ import { parseReleaseTitle } from "@/lib/rss/title-parser";
 import { resolveOfflineDownloadUrl } from "@/lib/torrent/magnet";
 import {
   buildEpisodePath,
+  buildSeasonLibraryPath,
+  extractEpisodeNumberFromFilename,
   getExtension,
   getRemoteBaseName,
   getRemoteDirName,
@@ -110,6 +114,7 @@ export async function pollAllSubscriptions() {
 
   for (const subscription of listEnabledSubscriptions()) {
     try {
+      await syncSubscriptionLibrary(subscription.id);
       const result = await pollSubscriptionFeed(subscription.id);
       totals.fetched += result.fetched;
       totals.discovered += result.discovered;
@@ -161,6 +166,10 @@ export async function refreshSubscriptionFeedCache(subscriptionId: number) {
 
 export async function pollSubscription(subscriptionId: number): Promise<PipelineResult> {
   try {
+    const subscription = getSubscription(subscriptionId);
+    if (subscription?.enabled) {
+      await syncSubscriptionLibrary(subscriptionId);
+    }
     return await pollSubscriptionFeed(subscriptionId);
   } finally {
     await runDownloadMaintenance();
@@ -194,6 +203,7 @@ async function pollSubscriptionFeed(subscriptionId: number): Promise<PipelineRes
   const items = parseRss(response.body);
   result.fetched = items.length;
   const rules = listRules(subscription.id);
+  const settings = getSystemSettings();
 
   // Phase 1: cache every rule-matching item so preferred revision is known
   // before any job is created (first download goes straight to v2 when present).
@@ -241,6 +251,48 @@ async function pollSubscriptionFeed(subscriptionId: number): Promise<PipelineRes
     }
 
     const existingJob = getJobForItem(feedItem.id);
+    const libraryEpisode =
+      metadata.episodeNumber == null
+        ? null
+        : getLibraryEpisodeState(subscription.id, metadata.episodeNumber);
+    if (libraryEpisode) {
+      const knownRevision = libraryEpisode.knownRevision;
+      const isKnownUpgrade =
+        knownRevision != null &&
+        metadata.releaseRevision > knownRevision &&
+        settings.replaceExistingOnRevision;
+
+      if (knownRevision == null && metadata.releaseRevision > 1) {
+        createOrUpdateJob({
+          subscriptionId: subscription.id,
+          feedItemId: feedItem.id,
+          status: "needs_review",
+          sourceUrl: candidate.downloadUrl,
+          targetPath: libraryEpisode.path,
+          errorMessage:
+            "Library episode exists but its revision is unknown; confirm before replacing it"
+        });
+        result.skipped += 1;
+        continue;
+      }
+
+      if (!isKnownUpgrade) {
+        if (
+          existingJob &&
+          ["discovered", "queued", "downloading", "ready_to_rename", "failed"].includes(
+            existingJob.status
+          )
+        ) {
+          updateJobStatus(existingJob.id, "completed", {
+            targetPath: libraryEpisode.path,
+            errorMessage: null
+          });
+        }
+        result.skipped += 1;
+        continue;
+      }
+    }
+
     if (existingJob) {
       // autoDownload was off when discovered; promote once enabled.
       if (
@@ -557,6 +609,77 @@ export async function submitJob(job: DownloadJob) {
 
 function isAlreadyInOfflineListError(message: string) {
   return isAlreadyInOfflineListErrorMessage(message);
+}
+
+/** Rebuild one subscription season's file index before RSS jobs are created. */
+export async function syncSubscriptionLibrary(subscriptionId: number) {
+  const subscription = getSubscription(subscriptionId);
+  if (!subscription) throw new Error(`Subscription ${subscriptionId} not found`);
+
+  const settings = getSystemSettings();
+  if (!settings.openlistBaseUrl || !settings.openlistToken) {
+    return {
+      root: null,
+      scanned: 0,
+      recognized: 0,
+      unrecognized: 0,
+      imported: 0,
+      updated: 0,
+      removed: 0,
+      available: false
+    };
+  }
+
+  const seasonRoot = buildSeasonLibraryPath({
+    destinationRoot: libraryRootForSubscription(subscription),
+    subscriptionName: subscription.name,
+    seasonNumber: subscription.seasonNumber,
+    seasonPathTemplate: settings.seasonPathTemplate
+  });
+
+  let files: OpenListFileEntry[];
+  try {
+    files = await listLibraryMediaFiles(seasonRoot);
+  } catch (error) {
+    if (!isOpenListNotFoundError(error)) throw error;
+    files = [];
+  }
+
+  const inventory = files.map((file) => {
+    const parsed = parseReleaseTitle(file.name);
+    const templateEpisode = extractEpisodeNumberFromFilename({
+      filename: file.name,
+      seasonNumber: subscription.seasonNumber,
+      episodeFileTemplate: settings.episodeFileTemplate
+    });
+    const parsedEpisode =
+      parsed.seasonNumber == null || parsed.seasonNumber === subscription.seasonNumber
+        ? parsed.episodeNumber
+        : null;
+    return {
+      path: file.path,
+      episodeNumber: templateEpisode ?? parsedEpisode,
+      sizeBytes: file.size
+    };
+  });
+  const synced = syncLibraryEpisodeInventory(
+    subscription.id,
+    seasonRoot,
+    inventory
+  );
+  const recognized = inventory.filter((file) => file.episodeNumber != null).length;
+  const result = {
+    root: seasonRoot,
+    scanned: inventory.length,
+    recognized,
+    unrecognized: inventory.length - recognized,
+    ...synced,
+    available: true
+  };
+  console.log(
+    `[pipeline] library sync subscription#${subscription.id} ${JSON.stringify(result)}`
+  );
+  return result;
 }
 
 export async function scanAndRenameIncoming() {
@@ -1026,6 +1149,28 @@ async function listIncomingMediaFiles(
   for (const entry of entries) {
     if (entry.isDirectory) {
       files.push(...(await listIncomingMediaFiles(entry.path, visited)));
+    } else if (isMediaFile(entry.path)) {
+      files.push(entry);
+    }
+  }
+  return files;
+}
+
+async function listLibraryMediaFiles(
+  root: string,
+  visited = new Set<string>()
+): Promise<OpenListFileEntry[]> {
+  const normalizedRoot = joinRemotePath(root);
+  if (visited.has(normalizedRoot)) return [];
+  visited.add(normalizedRoot);
+
+  const entries = await listOpenListFiles(normalizedRoot, {
+    refresh: visited.size === 1
+  });
+  const files: OpenListFileEntry[] = [];
+  for (const entry of entries) {
+    if (entry.isDirectory) {
+      files.push(...(await listLibraryMediaFiles(entry.path, visited)));
     } else if (isMediaFile(entry.path)) {
       files.push(entry);
     }

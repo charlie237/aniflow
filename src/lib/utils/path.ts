@@ -113,15 +113,72 @@ export function buildEpisodePath(params: {
   episodeFileTemplate?: string;
 }) {
   const context = episodeTemplateContext(params);
-  const seasonPath = renderTemplate(
-    params.seasonPathTemplate ?? "{title}/Season {season_pad}",
-    context
-  );
+  const seasonPath = buildSeasonLibraryPath(params);
   const filename = renderTemplate(
     params.episodeFileTemplate ?? "{title} - S{season_pad}E{episode_pad}.{ext}",
     context
   );
-  return joinRemotePath(params.destinationRoot, seasonPath, filename);
+  return joinRemotePath(seasonPath, filename);
+}
+
+/** Resolve the media-library directory that owns one subscription season. */
+export function buildSeasonLibraryPath(params: {
+  destinationRoot: string;
+  subscriptionName: string;
+  seasonNumber: number;
+  seasonPathTemplate?: string;
+}) {
+  const context = episodeTemplateContext({
+    ...params,
+    episodeNumber: 0,
+    extension: "mkv"
+  });
+  const seasonPath = renderTemplate(
+    params.seasonPathTemplate ?? "{title}/Season {season_pad}",
+    context
+  );
+  return joinRemotePath(params.destinationRoot, seasonPath);
+}
+
+export function extractEpisodeNumberFromFilename(params: {
+  filename: string;
+  seasonNumber: number;
+  episodeFileTemplate?: string;
+}) {
+  const template = sanitizePathSegment(
+    params.episodeFileTemplate ?? "{title} - S{season_pad}E{episode_pad}.{ext}"
+  );
+  const tokenPattern = /\{([a-z_]+)\}/gi;
+  let pattern = "";
+  let cursor = 0;
+  let hasEpisodeToken = false;
+  let match: RegExpExecArray | null;
+
+  while ((match = tokenPattern.exec(template))) {
+    pattern += escapeRegExp(template.slice(cursor, match.index));
+    const token = match[1]?.toLowerCase();
+    if (token === "episode" || token === "episode_pad") {
+      pattern += hasEpisodeToken ? "\\d{1,3}" : "(?<episode>\\d{1,3})";
+      hasEpisodeToken = true;
+    } else if (token === "season") {
+      pattern += escapeRegExp(String(params.seasonNumber));
+    } else if (token === "season_pad") {
+      pattern += escapeRegExp(String(params.seasonNumber).padStart(2, "0"));
+    } else if (token === "ext") {
+      pattern += "[a-z0-9]{2,6}";
+    } else {
+      pattern += ".+?";
+    }
+    cursor = match.index + match[0].length;
+  }
+
+  if (!hasEpisodeToken) return null;
+  pattern += escapeRegExp(template.slice(cursor));
+  const filenameMatch = params.filename.match(new RegExp(`^${pattern}$`, "i"));
+  const episode = Number(filenameMatch?.groups?.episode);
+  return Number.isInteger(episode) && episode >= 0 && episode < 1000
+    ? episode
+    : null;
 }
 
 function episodeTemplateContext(params: {
@@ -150,4 +207,8 @@ function renderTemplate(template: string, context: Record<string, string>) {
     .map((part) => sanitizePathSegment(part))
     .filter(Boolean)
     .join("/");
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

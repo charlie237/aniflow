@@ -204,15 +204,79 @@ function preferredEpisodeSql() {
       )
       LEFT JOIN episode_files ef_episode ON ef_episode.id = (
         SELECT id FROM episode_files
-        WHERE feed_item_id IS NULL
-          AND subscription_id = f.subscription_id
+        WHERE subscription_id = f.subscription_id
           AND episode_number = m.episode_number
+          AND status = 'renamed'
         ORDER BY updated_at DESC, id DESC
         LIMIT 1
       )
       WHERE (@subscriptionId IS NULL OR f.subscription_id = @subscriptionId)
         AND (@season IS NULL OR s.season_number = @season)
         AND ${ruleFilterSql("f", "m")}
+
+      UNION ALL
+
+      SELECT
+        NULL AS feed_id,
+        ef.subscription_id,
+        NULL AS guid,
+        NULL AS rss_guid,
+        s.name || ' - EP' || printf('%02d', ef.episode_number) AS title,
+        NULL AS link,
+        NULL AS download_url,
+        NULL AS published_at,
+        NULL AS raw_xml_json,
+        ef.created_at AS first_seen_at,
+        s.name AS subscription_name,
+        s.season_number,
+        NULL AS metadata_id,
+        NULL AS metadata_feed_item_id,
+        NULL AS release_group,
+        NULL AS parsed_title,
+        ef.episode_number,
+        printf('%02d', ef.episode_number) AS episode_text,
+        NULL AS release_revision,
+        NULL AS resolution,
+        NULL AS subtitle_language,
+        NULL AS container,
+        NULL AS tags_json,
+        NULL AS parse_confidence,
+        NULL AS needs_review,
+        NULL AS job_id,
+        NULL AS job_status,
+        NULL AS openlist_task_id,
+        NULL AS source_url,
+        NULL AS target_path,
+        NULL AS error_message,
+        NULL AS attempts,
+        NULL AS job_created_at,
+        NULL AS job_updated_at,
+        ef.id AS file_id,
+        ef.subscription_id AS file_subscription_id,
+        ef.feed_item_id AS file_feed_item_id,
+        ef.episode_number AS file_episode_number,
+        ef.original_path AS file_original_path,
+        ef.final_path AS file_final_path,
+        ef.size_bytes AS file_size_bytes,
+        ef.status AS file_status,
+        ef.error_message AS file_error_message,
+        ef.created_at AS file_created_at,
+        ef.updated_at AS file_updated_at,
+        ef.updated_at AS row_updated_at
+      FROM episode_files ef
+      JOIN subscriptions s ON s.id = ef.subscription_id
+      WHERE ef.status = 'renamed'
+        AND ef.episode_number IS NOT NULL
+        AND (@subscriptionId IS NULL OR ef.subscription_id = @subscriptionId)
+        AND (@season IS NULL OR s.season_number = @season)
+        AND NOT EXISTS (
+          SELECT 1
+          FROM feed_items f2
+          JOIN release_metadata m2 ON m2.feed_item_id = f2.id
+          WHERE f2.subscription_id = ef.subscription_id
+            AND m2.episode_number = ef.episode_number
+            AND ${ruleFilterSql("f2", "m2")}
+        )
     ),
     ranked AS (
       SELECT
@@ -350,18 +414,21 @@ function mapDashboardRow(record: Record<string, unknown>): DashboardEpisodeRow {
         }
   );
 
-  const item = mapFeedItem({
-    id: record.feed_id,
-    subscription_id: record.subscription_id,
-    guid: record.guid,
-    rss_guid: record.rss_guid,
-    title: record.title,
-    link: record.link,
-    download_url: record.download_url,
-    published_at: record.published_at,
-    raw_xml_json: record.raw_xml_json,
-    first_seen_at: record.first_seen_at
-  });
+  const item =
+    record.feed_id == null
+      ? null
+      : mapFeedItem({
+          id: record.feed_id,
+          subscription_id: record.subscription_id,
+          guid: record.guid,
+          rss_guid: record.rss_guid,
+          title: record.title,
+          link: record.link,
+          download_url: record.download_url,
+          published_at: record.published_at,
+          raw_xml_json: record.raw_xml_json,
+          first_seen_at: record.first_seen_at
+        });
 
   const job =
     record.job_id == null
@@ -398,18 +465,22 @@ function mapDashboardRow(record: Record<string, unknown>): DashboardEpisodeRow {
         });
 
   return {
-    id: `feed:${item.id}`,
-    subscriptionId: item.subscriptionId,
+    id: item ? `feed:${item.id}` : `file:${file?.id ?? record.file_id}`,
+    subscriptionId: Number(record.subscription_id),
     subscriptionName: String(record.subscription_name),
-    title: item.title,
+    title: item?.title ?? String(record.title),
     item,
     job,
     metadata,
     files: file ? [file] : [],
     seasonNumber:
       record.season_number == null ? null : Number(record.season_number),
-    episodeNumber: metadata?.episodeNumber ?? null,
-    episodeText: metadata?.episodeText ?? null,
+    episodeNumber:
+      metadata?.episodeNumber ??
+      (record.episode_number == null ? null : Number(record.episode_number)),
+    episodeText:
+      metadata?.episodeText ??
+      (record.episode_text == null ? null : String(record.episode_text)),
     updatedAt:
       record.row_updated_at == null ? null : String(record.row_updated_at)
   };

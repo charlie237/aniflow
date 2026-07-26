@@ -15,6 +15,8 @@ const {
   failStaleDownloadingJobs,
   getEpisodeFileForFeedItem,
   getJob,
+  getJobForFeedItem,
+  getLibraryEpisodeState,
   getSubscription,
   requeueFailedDownloadJobs,
   saveSystemSettings,
@@ -28,7 +30,8 @@ const {
   pollSubscription,
   reconcileDownloadingJobs,
   scanAndRenameIncoming,
-  submitJob
+  submitJob,
+  syncSubscriptionLibrary
 } = await import("@/lib/worker/pipeline");
 
 describe("requeueFailedDownloadJobs", () => {
@@ -546,6 +549,111 @@ describe("requeueFailedDownloadJobs", () => {
       expect(result.failed).toBe(1);
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(getSubscription(healthy.id)?.lastPolledAt).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("indexes an existing subscription season from OpenList", async () => {
+    const sub = createSubscription({
+      name: "Frieren",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=8250",
+      seasonNumber: 2,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token"
+    });
+
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { path?: string };
+      expect(body.path).toBe("/115/Anime/Frieren/Season 02");
+      return Response.json({
+        code: 200,
+        data: {
+          content: [1, 2, 3, 4].map((episode) => ({
+            name: `Frieren - S02E${String(episode).padStart(2, "0")}.mkv`,
+            size: episode * 100,
+            is_dir: false
+          }))
+        }
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const result = await syncSubscriptionLibrary(sub.id);
+      expect(result).toMatchObject({
+        available: true,
+        scanned: 4,
+        recognized: 4,
+        imported: 4
+      });
+      expect(getLibraryEpisodeState(sub.id, 4)).toMatchObject({
+        knownRevision: null,
+        fileCount: 1
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("queues only the missing episode after rebuilding a library index", async () => {
+    const sub = createSubscription({
+      name: "Frieren",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=8251",
+      seasonNumber: 2,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+    for (let episode = 1; episode <= 4; episode += 1) {
+      const path = `/115/Anime/Frieren/Season 02/Frieren - S02E${String(episode).padStart(2, "0")}.mkv`;
+      upsertEpisodeFile({
+        subscriptionId: sub.id,
+        episodeNumber: episode,
+        originalPath: path,
+        finalPath: path,
+        sizeBytes: episode * 100,
+        status: "renamed"
+      });
+    }
+
+    const items = [1, 2, 3, 4, 5]
+      .map(
+        (episode) => `<item>
+          <guid>frieren-s2-e${episode}</guid>
+          <title>[Group] Frieren S2 - ${String(episode).padStart(2, "0")} [1080p][CHS].mkv</title>
+          <enclosure url="https://mikanani.me/Download/frieren-s2-e${episode}.torrent" type="application/x-bittorrent" />
+        </item>`
+      )
+      .join("");
+    const xml = `<rss version="2.0"><channel><title>Frieren</title>${items}</channel></rss>`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(xml, {
+          status: 200,
+          headers: { "Content-Type": "application/xml" }
+        })
+      )
+    );
+    try {
+      const result = await pollSubscription(sub.id);
+      const feedRows = getSqlite()
+        .prepare("SELECT id, guid FROM feed_items WHERE subscription_id = ?")
+        .all(sub.id) as Array<{ id: number; guid: string }>;
+      expect(result.queued).toBe(1);
+      expect(feedRows).toHaveLength(5);
+      for (const feedRow of feedRows) {
+        const job = getJobForFeedItem(feedRow.id);
+        if (feedRow.guid === "frieren-s2-e5") {
+          expect(job).not.toBeNull();
+        } else {
+          expect(job).toBeNull();
+        }
+      }
     } finally {
       vi.unstubAllGlobals();
     }

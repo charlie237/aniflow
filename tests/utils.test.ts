@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { formatDateTime, formatFileSize } from "@/lib/utils";
 import { parseToUtcDate, toStoredUtcIso } from "@/lib/time";
+import {
+  buildEpisodePath,
+  buildSeasonLibraryPath,
+  extractEpisodeNumberFromFilename
+} from "@/lib/utils/path";
 
 describe("formatFileSize", () => {
   it("formats byte counts as file sizes", () => {
@@ -36,5 +41,45 @@ describe("formatDateTime / time helpers", () => {
     const iso = toStoredUtcIso("Tue, 07 Jul 2026 12:00:00 GMT");
     expect(iso).toBe("2026-07-07T12:00:00.000Z");
     expect(formatDateTime(iso)).toBe("07/07 20:00");
+  });
+});
+
+describe("media library paths", () => {
+  it("builds a stable subscription season directory and episode path", () => {
+    const params = {
+      destinationRoot: "/115/Anime",
+      subscriptionName: "葬送的芙莉莲",
+      seasonNumber: 2
+    };
+
+    expect(buildSeasonLibraryPath(params)).toBe(
+      "/115/Anime/葬送的芙莉莲/Season 02"
+    );
+    expect(
+      buildEpisodePath({
+        ...params,
+        episodeNumber: 5,
+        extension: "mkv"
+      })
+    ).toBe(
+      "/115/Anime/葬送的芙莉莲/Season 02/葬送的芙莉莲 - S02E05.mkv"
+    );
+  });
+
+  it("recovers an episode number from a custom file template", () => {
+    expect(
+      extractEpisodeNumberFromFilename({
+        filename: "Frieren.02x12.mkv",
+        seasonNumber: 2,
+        episodeFileTemplate: "{title}.{season_pad}x{episode_pad}.{ext}"
+      })
+    ).toBe(12);
+    expect(
+      extractEpisodeNumberFromFilename({
+        filename: "Frieren.01x12.mkv",
+        seasonNumber: 2,
+        episodeFileTemplate: "{title}.{season_pad}x{episode_pad}.{ext}"
+      })
+    ).toBeNull();
   });
 });

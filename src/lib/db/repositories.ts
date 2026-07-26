@@ -47,6 +47,7 @@ import type {
   WorkerTaskType
 } from "@/lib/db/types";
 import { parseToUtcDate } from "@/lib/time";
+import { isRemotePathWithin, joinRemotePath } from "@/lib/utils/path";
 
 const defaultSystemSettings: SystemSettings = {
   openlistBaseUrl: "",
@@ -674,6 +675,143 @@ export function libraryFileExistsAtPath(subscriptionId: number, finalPath: strin
     )
     .get({ subscriptionId, finalPath }) as { ok: number } | undefined;
   return Boolean(row);
+}
+
+export function getLibraryEpisodeState(
+  subscriptionId: number,
+  episodeNumber: number
+) {
+  const rows = getSqlite()
+    .prepare(
+      `SELECT ef.final_path, m.release_revision
+       FROM episode_files ef
+       LEFT JOIN release_metadata m ON m.feed_item_id = ef.feed_item_id
+       WHERE ef.subscription_id = @subscriptionId
+         AND ef.episode_number = @episodeNumber
+         AND ef.status = 'renamed'
+       ORDER BY datetime(ef.updated_at) DESC, ef.id DESC`
+    )
+    .all({ subscriptionId, episodeNumber }) as Array<{
+      final_path: string | null;
+      release_revision: number | null;
+    }>;
+
+  if (rows.length === 0) return null;
+  const revisions = rows
+    .map((row) => Number(row.release_revision))
+    .filter((revision) => Number.isFinite(revision) && revision > 0);
+  return {
+    path: rows.find((row) => row.final_path)?.final_path ?? null,
+    knownRevision: revisions.length > 0 ? Math.max(...revisions) : null,
+    fileCount: rows.length
+  };
+}
+
+export interface LibraryInventoryFile {
+  path: string;
+  episodeNumber: number | null;
+  sizeBytes: number | null;
+}
+
+/** Replace the recorded state for one scanned season with OpenList's current view. */
+export function syncLibraryEpisodeInventory(
+  subscriptionId: number,
+  seasonRoot: string,
+  files: LibraryInventoryFile[]
+) {
+  const sqlite = getSqlite();
+  const normalizedRoot = joinRemotePath(seasonRoot);
+  const normalizedFiles = files.map((file) => ({
+    ...file,
+    path: joinRemotePath(file.path)
+  }));
+  const seenPaths = new Set(normalizedFiles.map((file) => file.path));
+
+  const transaction = sqlite.transaction(() => {
+    const existing = sqlite
+      .prepare(
+        `SELECT id, original_path, final_path, episode_number, size_bytes
+         FROM episode_files
+         WHERE subscription_id = ? AND status = 'renamed'
+         ORDER BY id DESC`
+      )
+      .all(subscriptionId) as Array<{
+        id: number;
+        original_path: string;
+        final_path: string | null;
+        episode_number: number | null;
+        size_bytes: number | null;
+      }>;
+    const existingByFinalPath = new Map(
+      existing
+        .filter((row) => row.final_path)
+        .map((row) => [joinRemotePath(row.final_path), row])
+    );
+    let imported = 0;
+    let updated = 0;
+
+    for (const file of normalizedFiles) {
+      if (file.episodeNumber == null) continue;
+      const current = existingByFinalPath.get(file.path);
+      if (current) {
+        if (
+          current.episode_number !== file.episodeNumber ||
+          current.size_bytes !== file.sizeBytes
+        ) {
+          sqlite
+            .prepare(
+              `UPDATE episode_files
+               SET episode_number = ?, size_bytes = ?, status = 'renamed',
+                   error_message = NULL, updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?`
+            )
+            .run(file.episodeNumber, file.sizeBytes, current.id);
+          updated += 1;
+        }
+        continue;
+      }
+
+      sqlite
+        .prepare(
+          `INSERT INTO episode_files (
+             subscription_id, feed_item_id, episode_number, original_path,
+             final_path, size_bytes, status, error_message
+           ) VALUES (?, NULL, ?, ?, ?, ?, 'renamed', NULL)
+           ON CONFLICT(subscription_id, original_path) DO UPDATE SET
+             episode_number = excluded.episode_number,
+             final_path = excluded.final_path,
+             size_bytes = excluded.size_bytes,
+             status = 'renamed',
+             error_message = NULL,
+             updated_at = CURRENT_TIMESTAMP`
+        )
+        .run(
+          subscriptionId,
+          file.episodeNumber,
+          file.path,
+          file.path,
+          file.sizeBytes
+        );
+      imported += 1;
+    }
+
+    let removed = 0;
+    for (const row of existing) {
+      if (!row.final_path) continue;
+      const finalPath = joinRemotePath(row.final_path);
+      if (
+        isRemotePathWithin(finalPath, normalizedRoot) &&
+        !seenPaths.has(finalPath)
+      ) {
+        sqlite.prepare("DELETE FROM episode_files WHERE id = ?").run(row.id);
+        removed += 1;
+      }
+    }
+
+    return { imported, updated, removed };
+  });
+
+  return transaction();
 }
 
 export function getJobForFeedItem(feedItemId: number) {
