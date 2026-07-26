@@ -41,7 +41,6 @@ export async function setSessionCookie() {
   jar.set(SESSION_COOKIE, createSessionToken(), {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: SESSION_TTL_SECONDS
   });
@@ -52,7 +51,6 @@ export async function clearSessionCookie() {
   jar.set(SESSION_COOKIE, "", {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: 0
   });
