@@ -9,7 +9,7 @@ Aniflow 是面向 OpenList 下载流程的本地蜜柑（Mikan）RSS 动画订�
 ## 技术栈
 
 - Next.js App Router、TypeScript、Tailwind CSS
-- 本地 shadcn/ui 风格组件
+- 本地 shadcn/ui 风格组件（顶栏可切换亮色 / 暗色 / 跟随系统）
 - SQLite（`better-sqlite3` + Drizzle ORM，`src/lib/db/schema.ts`）
 - RSS XML 解析（`fast-xml-parser`）
 - OpenList 115 离线下载：`/api/fs/add_offline_download`
@@ -45,6 +45,14 @@ AUTH_SECRET=
 - API：`Authorization: Bearer <AUTH_PASSWORD>` 或 HTTP Basic（`任意用户名:AUTH_PASSWORD`）
 - 独立 worker 进程不走该密码；若对外暴露，请用主机网络或反向代理保护
 
+## Web 界面
+
+- **运行总览** — 任务、集数、后台队列与 Worker 健康状态
+- **订阅** — 解析 RSS、创建规则、归档或删除订阅
+- **后台设置** — OpenList / 115 / 代理 / 命名 / TMDB / Worker 间隔，以及维护操作
+
+主题（亮色、暗色或跟随系统）保存在浏览器本地，通过顶栏图标循环切换。
+
 ## OpenList 相关设置
 
 在应用的 **后台设置** 中配置 OpenList API、115 访问方式、代理、命名模板、TMDB 与 worker 轮询间隔。运行时集成配置保存在 SQLite 中，不写在 `.env`。
@@ -55,9 +63,15 @@ AUTH_SECRET=
 
 RSS 抓取仅在 **后台设置** 中开启代理开关后才会使用配置的代理。代理默认值为 `http://127.0.0.1:7890`，未开启时不会使用。
 
+### 维护
+
+**后台设置 → 维护 → 清空运行数据** 会删除 RSS 抓取结果、解析元数据、下载队列和文件扫描记录；后台设置、订阅和筛选规则会保留。提交前须在弹窗中完整输入「清空运行数据」进行确认，避免误点。
+
 ## 订阅流程
 
 在 **订阅** 页先解析 HTTPS 的 `mikanani.me/RSS/` 链接。其它 RSS 源与种子下载站会被服务端拒绝。解析后从下拉框选择识别到的标题、字幕组、分辨率、字幕语言并创建订阅；选中的组 / 分辨率 / 语言会作为该订阅的允许规则保存。
+
+追更中的订阅可 **归档**（停止跟踪）或之后再恢复。删除订阅时会弹出确认框，可选择 **同时清下载残留**，清理该订阅下载目录中可明确匹配的残留文件（媒体库文件不会被删除）。
 
 ## Docker
 

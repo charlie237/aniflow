@@ -9,7 +9,7 @@ It polls Mikan RSS feeds, parses release metadata (subtitle group, resolution, s
 ## Stack
 
 - Next.js App Router, TypeScript, Tailwind CSS
-- shadcn/ui-style local components
+- shadcn/ui-style local components (light / dark / system theme via the header toggle)
 - SQLite via `better-sqlite3` + Drizzle ORM (`src/lib/db/schema.ts`)
 - RSS XML parsing via `fast-xml-parser`
 - OpenList 115 offline download via `/api/fs/add_offline_download`
@@ -45,6 +45,14 @@ AUTH_SECRET=
 - API clients: `Authorization: Bearer <AUTH_PASSWORD>` or HTTP Basic (`any-username:AUTH_PASSWORD`)
 - The dedicated worker process does not use this password; protect the host network / reverse proxy if exposed
 
+## Web UI
+
+- **Overview** — jobs, episodes, worker queue, and health
+- **Subscriptions** — parse RSS, create rules, archive or delete subscriptions
+- **Settings** — OpenList / 115 / proxy / naming / TMDB / worker interval, plus maintenance
+
+Theme preference (light, dark, or follow system) is stored in the browser; use the header icon to cycle modes.
+
 ## Required OpenList settings
 
 Open **Settings** in the app and configure OpenList API, 115 access method, proxy, naming templates, TMDB, and worker interval. Runtime integration settings are stored in SQLite, not in `.env`.
@@ -55,9 +63,15 @@ The download directory is the **global incoming root**, for example `/115/Anime/
 
 RSS fetching uses the proxy configured in **Settings** only when the proxy switch is enabled. The proxy field defaults to `http://127.0.0.1:7890`, but it is not used unless enabled.
 
+### Maintenance
+
+**Clear runtime data** under Settings → Maintenance removes RSS poll results, parsed metadata, download jobs, and file-scan records. Settings, subscriptions, and filter rules are kept. Submit only after typing the exact phrase `清空运行数据` in the confirmation dialog (prevents accidental clicks).
+
 ## Subscription flow
 
 Use the **Subscriptions** page to parse an HTTPS `mikanani.me/RSS/` URL first. Other RSS providers and torrent download hosts are rejected by the server. After parsing, create a subscription by selecting the detected title, subtitle group, resolution, and subtitle language from dropdowns. Selected group / resolution / language values are saved as allow rules for that subscription.
+
+Active subscriptions can be **archived** (stop tracking) or restored later. Deleting a subscription opens a confirm dialog; optionally enable **cleanup download residuals** to remove clearly matched files under that subscription’s incoming path (library media is never deleted).
 
 ## Docker
 
