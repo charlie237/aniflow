@@ -2,6 +2,7 @@
 
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/components/locale-provider";
 
 export function TablePagination({
   page,
@@ -18,14 +19,13 @@ export function TablePagination({
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
 }) {
+  const { t } = useI18n();
   const safePageCount = Math.max(pageCount, 1);
 
   return (
     <div className="flex flex-col gap-2 border-t border-[var(--line)] pt-3 text-xs text-[var(--muted)] sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-center gap-2">
-        <span>
-          共 <span className="data-digits text-[var(--foreground)]">{total}</span> 条
-        </span>
+        <span className="data-digits">{t("common.totalItems", { total })}</span>
         <select
           value={pageSize}
           onChange={(event) => onPageSizeChange(Number(event.target.value))}
@@ -33,7 +33,7 @@ export function TablePagination({
         >
           {[10, 20, 50].map((size) => (
             <option key={size} value={size}>
-              {size} / 页
+              {t("common.perPage", { size })}
             </option>
           ))}
         </select>
@@ -48,7 +48,7 @@ export function TablePagination({
           variant="outline"
           disabled={page <= 0}
           onClick={() => onPageChange(Math.max(page - 1, 0))}
-          aria-label="上一页"
+          aria-label={t("common.prevPage")}
         >
           <ChevronLeft className="size-4" />
         </Button>
@@ -58,7 +58,7 @@ export function TablePagination({
           variant="outline"
           disabled={page >= safePageCount - 1}
           onClick={() => onPageChange(Math.min(page + 1, safePageCount - 1))}
-          aria-label="下一页"
+          aria-label={t("common.nextPage")}
         >
           <ChevronRight className="size-4" />
         </Button>

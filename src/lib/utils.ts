@@ -7,8 +7,11 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /** @see {@link formatDateTimeImpl} — Asia/Shanghai display of UTC-stored timestamps. */
-export function formatDateTime(value?: string | null) {
-  return formatDateTimeImpl(value);
+export function formatDateTime(
+  value?: string | null,
+  options?: { locale?: string; never?: string }
+) {
+  return formatDateTimeImpl(value, options);
 }
 
 export function compactNumber(value: number) {

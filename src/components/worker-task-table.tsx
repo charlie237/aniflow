@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Eye, ListChecks } from "lucide-react";
+import { useI18n } from "@/components/locale-provider";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,28 +29,13 @@ import {
   DialogTrigger
 } from "@/components/ui/dialog";
 import { TablePagination } from "@/components/table-pagination";
-import { formatDateTime } from "@/lib/utils";
 import type {
   DashboardData,
   WorkerTask,
   WorkerTaskStatus,
   WorkerTaskType
 } from "@/lib/db/types";
-
-const taskTypeLabels: Record<WorkerTaskType, string> = {
-  poll_all: "全部同步并轮询",
-  poll_subscription: "订阅同步并轮询",
-  cleanup_subscription_incoming: "清下载残留",
-  scan_incoming: "扫描整理",
-  submit_queued: "提交下载"
-};
-
-const taskStatusLabels: Record<WorkerTaskStatus, string> = {
-  queued: "排队中",
-  running: "运行中",
-  completed: "已完成",
-  failed: "失败"
-};
+import type { TranslateFn } from "@/lib/i18n";
 
 export function WorkerTaskTable({
   tasks,
@@ -58,6 +44,7 @@ export function WorkerTaskTable({
   tasks: DashboardData["workerTasks"];
   subscriptions: DashboardData["subscriptions"];
 }) {
+  const { t, formatDateTime } = useI18n();
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   const subscriptionNames = new Map(
@@ -70,31 +57,44 @@ export function WorkerTaskTable({
     [pageSize, safePage, tasks]
   );
 
+  function subscriptionLabel(subscriptionId: number | null) {
+    if (subscriptionId == null) return t("common.allSubscriptions");
+    return (
+      subscriptionNames.get(subscriptionId) ??
+      t("common.subscriptionFallback", { id: subscriptionId })
+    );
+  }
+
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ListChecks className="size-4 text-[var(--signal)]" />
-          后台队列
+          {t("workerTask.title")}
         </CardTitle>
-        <CardDescription>媒体库同步、RSS 轮询和文件整理会先进入队列。</CardDescription>
+        <CardDescription>{t("workerTask.description")}</CardDescription>
       </CardHeader>
       <CardContent>
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="w-24">状态</TableHead>
-              <TableHead>任务</TableHead>
-              <TableHead className="w-24">次数</TableHead>
-              <TableHead className="w-28">更新</TableHead>
-              <TableHead className="w-16 text-right">详情</TableHead>
+              <TableHead className="w-24">{t("workerTask.colStatus")}</TableHead>
+              <TableHead>{t("workerTask.colTask")}</TableHead>
+              <TableHead className="w-24">{t("workerTask.colAttempts")}</TableHead>
+              <TableHead className="w-28">{t("workerTask.colUpdated")}</TableHead>
+              <TableHead className="w-16 text-right">
+                {t("workerTask.colDetails")}
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {tasks.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="h-20 text-center text-[var(--muted)]">
-                  暂无后台任务。
+                <TableCell
+                  colSpan={5}
+                  className="h-20 text-center text-[var(--muted)]"
+                >
+                  {t("workerTask.empty")}
                 </TableCell>
               </TableRow>
             ) : (
@@ -112,16 +112,15 @@ export function WorkerTaskTable({
                       {task.status === "running" || task.status === "queued" ? (
                         <span className="status-live-dot" aria-hidden />
                       ) : null}
-                      {taskStatusLabels[task.status]}
+                      {taskStatusLabel(t, task.status)}
                     </Badge>
                   </TableCell>
                   <TableCell className="max-w-[420px]">
-                    <div className="font-medium">{taskTypeLabels[task.type]}</div>
+                    <div className="font-medium">
+                      {taskTypeLabel(t, task.type)}
+                    </div>
                     <div className="mt-1 truncate text-xs text-[var(--muted)]">
-                      {task.subscriptionId
-                        ? subscriptionNames.get(task.subscriptionId) ??
-                          `订阅 ${task.subscriptionId}`
-                        : "全部订阅"}
+                      {subscriptionLabel(task.subscriptionId)}
                     </div>
                     {task.errorMessage ? (
                       <div className="mt-1 line-clamp-2 text-xs text-[var(--danger)]">
@@ -129,19 +128,16 @@ export function WorkerTaskTable({
                       </div>
                     ) : null}
                   </TableCell>
-                  <TableCell className="data-digits text-xs">{task.attempts}</TableCell>
+                  <TableCell className="data-digits text-xs">
+                    {task.attempts}
+                  </TableCell>
                   <TableCell className="data-digits text-xs">
                     {formatDateTime(task.updatedAt)}
                   </TableCell>
                   <TableCell className="text-right">
                     <WorkerTaskDetails
                       task={task}
-                      subscriptionName={
-                        task.subscriptionId
-                          ? subscriptionNames.get(task.subscriptionId) ??
-                            `订阅 ${task.subscriptionId}`
-                          : "全部订阅"
-                      }
+                      subscriptionName={subscriptionLabel(task.subscriptionId)}
                     />
                   </TableCell>
                 </TableRow>
@@ -174,29 +170,61 @@ function WorkerTaskDetails({
   task: WorkerTask;
   subscriptionName: string;
 }) {
+  const { t, formatDateTime } = useI18n();
   return (
     <Dialog>
       <DialogTrigger asChild>
-        <Button type="button" size="icon" variant="ghost" aria-label="查看后台任务详情">
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          aria-label={t("workerTask.viewDetails")}
+        >
           <Eye className="size-4" />
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[86vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>后台任务 #{task.id}</DialogTitle>
+          <DialogTitle>{t("workerTask.taskTitle", { id: task.id })}</DialogTitle>
           <DialogDescription>
-            {taskTypeLabels[task.type]} / {subscriptionName}
+            {taskTypeLabel(t, task.type)} / {subscriptionName}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <div className="grid gap-2 rounded-[var(--radius)] bg-[var(--panel-strong)] p-3 text-sm">
-            <TaskDetail label="状态" value={taskStatusLabels[task.status]} />
-            <TaskDetail label="尝试次数" value={task.attempts.toString()} mono />
-            <TaskDetail label="创建" value={formatDateTime(task.createdAt)} mono />
-            <TaskDetail label="开始" value={formatDateTime(task.startedAt)} mono />
-            <TaskDetail label="结束" value={formatDateTime(task.finishedAt)} mono />
-            <TaskDetail label="更新" value={formatDateTime(task.updatedAt)} mono />
-            <TaskDetail label="错误" value={task.errorMessage} />
+            <TaskDetail
+              label={t("workerTask.labelStatus")}
+              value={taskStatusLabel(t, task.status)}
+            />
+            <TaskDetail
+              label={t("workerTask.labelAttempts")}
+              value={task.attempts.toString()}
+              mono
+            />
+            <TaskDetail
+              label={t("workerTask.labelCreated")}
+              value={formatDateTime(task.createdAt)}
+              mono
+            />
+            <TaskDetail
+              label={t("workerTask.labelStarted")}
+              value={formatDateTime(task.startedAt)}
+              mono
+            />
+            <TaskDetail
+              label={t("workerTask.labelFinished")}
+              value={formatDateTime(task.finishedAt)}
+              mono
+            />
+            <TaskDetail
+              label={t("workerTask.labelUpdated")}
+              value={formatDateTime(task.updatedAt)}
+              mono
+            />
+            <TaskDetail
+              label={t("workerTask.labelError")}
+              value={task.errorMessage}
+            />
           </div>
           <div>
             <div className="mb-2 text-sm font-medium">Payload</div>
@@ -233,6 +261,14 @@ function TaskDetail({
       </div>
     </div>
   );
+}
+
+function taskTypeLabel(t: TranslateFn, type: WorkerTaskType) {
+  return t(`workerTask.types.${type}`);
+}
+
+function taskStatusLabel(t: TranslateFn, status: WorkerTaskStatus) {
+  return t(`workerTask.statuses.${status}`);
 }
 
 function prettyJson(value: string) {

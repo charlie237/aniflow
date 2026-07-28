@@ -2,6 +2,8 @@
 
 import { RadioTower } from "lucide-react";
 import { loginAction } from "@/app/auth-actions";
+import { LocaleToggle } from "@/components/locale-toggle";
+import { useI18n } from "@/components/locale-provider";
 import { AnimateIn } from "@/components/motion";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
@@ -22,9 +24,14 @@ export function LoginView({
   error: string | null;
   next: string;
 }) {
+  const { t } = useI18n();
+  const description = t("login.descriptionPrefix");
+  const [before, after = ""] = description.split("AUTH_PASSWORD");
+
   return (
     <main className="relative flex min-h-screen items-center justify-center px-4">
-      <div className="absolute right-4 top-4">
+      <div className="absolute right-4 top-4 flex items-center gap-1">
+        <LocaleToggle />
         <ThemeToggle />
       </div>
       <AnimateIn className="w-full max-w-md" y={14} duration={0.42}>
@@ -34,10 +41,13 @@ export function LoginView({
               <RadioTower className="size-5" />
             </div>
             <div>
-              <CardTitle className="text-2xl tracking-tight">登录 Aniflow</CardTitle>
+              <CardTitle className="text-2xl tracking-tight">
+                {t("login.title")}
+              </CardTitle>
               <CardDescription className="mt-1.5">
-                已启用 <code className="data-digits text-xs">AUTH_PASSWORD</code>
-                ，请输入访问密码。
+                {before}
+                <code className="data-digits text-xs">AUTH_PASSWORD</code>
+                {after}
               </CardDescription>
             </div>
           </CardHeader>
@@ -49,7 +59,7 @@ export function LoginView({
                 value={next.startsWith("/") ? next : "/"}
               />
               <div className="flex flex-col gap-2">
-                <Label htmlFor="password">访问密码</Label>
+                <Label htmlFor="password">{t("login.password")}</Label>
                 <Input
                   id="password"
                   name="password"
@@ -62,11 +72,11 @@ export function LoginView({
               </div>
               {error ? (
                 <p className="text-sm text-[var(--danger-text)]">
-                  {error === "invalid" ? "密码不正确" : "登录失败，请重试"}
+                  {error === "invalid" ? t("login.invalid") : t("login.failed")}
                 </p>
               ) : null}
               <Button type="submit" className="w-full" variant="signal">
-                进入控制台
+                {t("login.submit")}
               </Button>
             </form>
           </CardContent>

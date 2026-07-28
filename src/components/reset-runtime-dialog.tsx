@@ -3,6 +3,7 @@
 import { Trash2 } from "lucide-react";
 import { useState } from "react";
 import { resetRuntimeDataAction } from "@/app/actions";
+import { useI18n } from "@/components/locale-provider";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { RUNTIME_RESET_CONFIRM_PHRASE } from "@/lib/runtime-reset";
 
 export function ResetRuntimeDialog() {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [confirmText, setConfirmText] = useState("");
   const canSubmit = confirmText.trim() === RUNTIME_RESET_CONFIRM_PHRASE;
@@ -32,15 +34,13 @@ export function ResetRuntimeDialog() {
       <DialogTrigger asChild>
         <Button type="button" variant="danger">
           <Trash2 />
-          清空运行数据
+          {t("reset.trigger")}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>清空运行数据</DialogTitle>
-          <DialogDescription>
-            将删除 RSS 抓取结果、解析元数据、下载队列和文件扫描记录。后台设置、订阅和筛选规则会保留。此操作不可撤销。
-          </DialogDescription>
+          <DialogTitle>{t("reset.title")}</DialogTitle>
+          <DialogDescription>{t("reset.description")}</DialogDescription>
         </DialogHeader>
         <form
           action={resetRuntimeDataAction}
@@ -55,7 +55,7 @@ export function ResetRuntimeDialog() {
         >
           <div className="grid gap-1.5">
             <Label htmlFor="confirmRuntimeReset">
-              请输入「{RUNTIME_RESET_CONFIRM_PHRASE}」以确认
+              {t("reset.typeToConfirm", { phrase: RUNTIME_RESET_CONFIRM_PHRASE })}
             </Label>
             <Input
               id="confirmRuntimeReset"
@@ -75,11 +75,11 @@ export function ResetRuntimeDialog() {
               variant="outline"
               onClick={() => setOpen(false)}
             >
-              取消
+              {t("common.cancel")}
             </Button>
             <Button type="submit" variant="danger" disabled={!canSubmit}>
               <Trash2 />
-              确认清空
+              {t("reset.confirm")}
             </Button>
           </div>
         </form>

@@ -2,17 +2,12 @@
 
 import { Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/components/locale-provider";
 import {
   useTheme,
   type ThemePreference
 } from "@/components/theme-provider";
 import { cn } from "@/lib/utils";
-
-const LABELS: Record<ThemePreference, string> = {
-  system: "跟随系统",
-  light: "亮色",
-  dark: "暗色"
-};
 
 const ICONS: Record<ThemePreference, typeof Sun> = {
   system: Monitor,
@@ -32,16 +27,21 @@ export function ThemeToggle({
   showLabel?: boolean;
 }) {
   const { preference, cyclePreference, ready } = useTheme();
+  const { t } = useI18n();
   const Icon = ICONS[preference];
-  const label = LABELS[preference];
-  const nextLabel =
-    LABELS[
-      preference === "system"
-        ? "light"
-        : preference === "light"
-          ? "dark"
-          : "system"
-    ];
+  const labels: Record<ThemePreference, string> = {
+    system: t("theme.system"),
+    light: t("theme.light"),
+    dark: t("theme.dark")
+  };
+  const label = labels[preference];
+  const nextPreference: ThemePreference =
+    preference === "system"
+      ? "light"
+      : preference === "light"
+        ? "dark"
+        : "system";
+  const nextLabel = labels[nextPreference];
 
   return (
     <Button
@@ -49,8 +49,8 @@ export function ThemeToggle({
       variant={showLabel ? "outline" : "ghost"}
       size={showLabel ? "default" : "icon"}
       onClick={cyclePreference}
-      aria-label={`主题：${label}，点击切换为${nextLabel}`}
-      title={`主题：${label}（点击切换为${nextLabel}）`}
+      aria-label={t("theme.aria", { current: label, next: nextLabel })}
+      title={t("theme.title", { current: label, next: nextLabel })}
       className={cn(
         showLabel
           ? "gap-2 text-[var(--foreground)]"

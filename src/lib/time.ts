@@ -15,11 +15,14 @@
 export const DISPLAY_TIME_ZONE = "Asia/Shanghai";
 
 /** Format any stored timestamp for UI (Asia/Shanghai). */
-export function formatDateTime(value?: string | null) {
-  if (!value) return "从未";
+export function formatDateTime(
+  value?: string | null,
+  options?: { locale?: string; never?: string }
+) {
+  if (!value) return options?.never ?? "从未";
   const date = parseToUtcDate(value);
   if (Number.isNaN(date.getTime())) return value;
-  const parts = new Intl.DateTimeFormat("zh-CN", {
+  const parts = new Intl.DateTimeFormat(options?.locale ?? "zh-CN", {
     timeZone: DISPLAY_TIME_ZONE,
     month: "2-digit",
     day: "2-digit",

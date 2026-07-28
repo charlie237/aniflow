@@ -35,6 +35,7 @@ import {
   ensureOpenListDirectory,
   type OpenList115CheckResult
 } from "@/lib/openlist/client";
+import { getDictionary } from "@/lib/i18n/server";
 import { RUNTIME_RESET_CONFIRM_PHRASE } from "@/lib/runtime-reset";
 import { toBool } from "@/lib/utils";
 import { isMikanDownloadUrl, isMikanRssUrl } from "@/lib/net/url-policy";
@@ -46,7 +47,7 @@ import {
 } from "@/lib/utils/path";
 
 const mikanRssUrlSchema = z.string().url().refine(isMikanRssUrl, {
-  message: "仅支持 mikanani.me/RSS/ 订阅链接"
+  message: "Only mikanani.me/RSS/ feed URLs are supported"
 });
 
 const subscriptionSchema = z.object({
@@ -119,7 +120,7 @@ const manualEpisodeSchema = z.object({
   episodeNumber: z.coerce.number().int().min(0).max(999),
   releaseRevision: z.coerce.number().int().min(1).max(99).default(1),
   sourceUrl: z.string().trim().min(1).refine(isDownloadUrl, {
-    message: "请输入 magnet 或 http(s) 下载链接"
+    message: "Enter a magnet or http(s) download URL"
   }),
   title: z.string().trim().optional().default("")
 });
@@ -544,16 +545,20 @@ async function configure115TempDirCheck(
   tempDir: string
 ): Promise<OpenList115CheckResult["checks"][number]> {
   const settings = getSystemSettings();
+  const { t } = await getDictionary();
   try {
     await configure115TempDir(tempDir);
     return {
-      label: "OpenList 后台同步",
+      label: t("check.openlistSync"),
       ok: true,
-      message: `已把下载目录 ${tempDir} 同步到 OpenList 的 ${settings.openlist115Mode} 后台配置`
+      message: t("check.openlistSyncOk", {
+        path: tempDir,
+        mode: settings.openlist115Mode
+      })
     };
   } catch (error) {
     return {
-      label: "OpenList 后台同步",
+      label: t("check.openlistSync"),
       ok: false,
       message: error instanceof Error ? error.message : String(error)
     };
@@ -569,16 +574,20 @@ async function ensureConfiguredOpenListDirectories(settings: SystemSettings) {
 async function ensureConfiguredOpenListDirectoriesCheck(
   settings: SystemSettings
 ): Promise<OpenList115CheckResult["checks"][number]> {
+  const { t } = await getDictionary();
   try {
     await ensureConfiguredOpenListDirectories(settings);
     return {
-      label: "OpenList 目录创建",
+      label: t("check.openlistDirs"),
       ok: true,
-      message: `已确认 ${settings.mediaLibraryRoot} 和 ${settings.openlistIncomingPath}`
+      message: t("check.openlistDirsOk", {
+        media: settings.mediaLibraryRoot,
+        incoming: settings.openlistIncomingPath
+      })
     };
   } catch (error) {
     return {
-      label: "OpenList 目录创建",
+      label: t("check.openlistDirs"),
       ok: false,
       message: error instanceof Error ? error.message : String(error)
     };
@@ -651,7 +660,9 @@ function resolveSubscriptionIncomingPathInput(params: {
   const explicitPath = joinRemotePath(explicit);
 
   if (!isRemotePathWithin(explicitPath, root)) {
-    throw new Error(`订阅下载目录必须位于全局下载根目录 ${root} 内`);
+    throw new Error(
+      `Subscription download path must stay under the global incoming root ${root}`
+    );
   }
 
   // Legacy create sent the shared root as the default path.

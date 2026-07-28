@@ -5,15 +5,11 @@ import { usePathname } from "next/navigation";
 import { LogOut, RadioTower } from "lucide-react";
 import type { ReactNode } from "react";
 import { logoutAction } from "@/app/auth-actions";
+import { LocaleToggle } from "@/components/locale-toggle";
+import { useI18n } from "@/components/locale-provider";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-
-const NAV = [
-  { href: "/", label: "运行总览" },
-  { href: "/subscriptions", label: "订阅" },
-  { href: "/settings", label: "后台设置" }
-] as const;
 
 export function AppShellClient({
   children,
@@ -23,6 +19,13 @@ export function AppShellClient({
   authEnabled: boolean;
 }) {
   const pathname = usePathname();
+  const { t } = useI18n();
+
+  const nav = [
+    { href: "/", label: t("nav.overview") },
+    { href: "/subscriptions", label: t("nav.subscriptions") },
+    { href: "/settings", label: t("nav.settings") }
+  ] as const;
 
   return (
     <main className="min-h-screen">
@@ -35,7 +38,7 @@ export function AppShellClient({
             <span className="tracking-tight">Aniflow</span>
           </Link>
           <nav className="flex flex-wrap items-center gap-1 text-sm">
-            {NAV.map((item) => {
+            {nav.map((item) => {
               const active =
                 item.href === "/"
                   ? pathname === "/"
@@ -55,6 +58,7 @@ export function AppShellClient({
                 </Link>
               );
             })}
+            <LocaleToggle />
             <ThemeToggle />
             {authEnabled ? (
               <form action={logoutAction}>
@@ -64,7 +68,7 @@ export function AppShellClient({
                   className="h-9 gap-1.5 px-3 text-[var(--muted)]"
                 >
                   <LogOut className="size-3.5" />
-                  退出
+                  {t("nav.logout")}
                 </Button>
               </form>
             ) : null}

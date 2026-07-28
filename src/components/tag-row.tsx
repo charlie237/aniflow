@@ -1,8 +1,14 @@
+"use client";
+
 import { Badge } from "@/components/ui/badge";
+import { useI18n } from "@/components/locale-provider";
 import type { ReleaseMetadata } from "@/lib/db/types";
 
 export function TagRow({ metadata }: { metadata: ReleaseMetadata | null }) {
-  if (!metadata) return <span className="text-sm text-[var(--muted)]">无标签</span>;
+  const { t } = useI18n();
+  if (!metadata) {
+    return <span className="text-sm text-[var(--muted)]">{t("common.noTags")}</span>;
+  }
 
   const tags = [
     metadata.releaseGroup,
@@ -11,7 +17,7 @@ export function TagRow({ metadata }: { metadata: ReleaseMetadata | null }) {
   ].filter((value): value is string => Boolean(value));
 
   if (tags.length === 0) {
-    return <span className="text-sm text-[var(--muted)]">无标签</span>;
+    return <span className="text-sm text-[var(--muted)]">{t("common.noTags")}</span>;
   }
 
   return (

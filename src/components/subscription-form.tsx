@@ -19,6 +19,7 @@ import {
   restoreSubscriptionAction,
   updateParsedSubscriptionAction
 } from "@/app/actions";
+import { useI18n } from "@/components/locale-provider";
 import { StaggerChildren } from "@/components/motion";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,7 @@ import type { FilterRule, Subscription } from "@/lib/db/types";
 import type { RssPreview } from "@/lib/rss/preview";
 import { dateMs } from "@/lib/time";
 import { buildSubscriptionIncomingPath } from "@/lib/utils/path";
+import type { TranslateFn } from "@/lib/i18n";
 
 export function SubscriptionForm({
   subscriptions,
@@ -55,12 +57,13 @@ export function SubscriptionForm({
   preview?: RssPreview | null;
   defaultIncomingPath?: string;
 }) {
+  const { t } = useI18n();
   return (
     <Card>
       <CardHeader>
-        <CardTitle>订阅</CardTitle>
+        <CardTitle>{t("subscription.cardTitle")}</CardTitle>
         <CardDescription>
-          解析 RSS 后，从发布条目里选择字幕组、分辨率和字幕语言，再确认命中预览。
+          {t("subscription.cardDescription")}
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-5">
@@ -68,7 +71,7 @@ export function SubscriptionForm({
           <CreateFromPreview preview={preview} defaultIncomingPath={defaultIncomingPath} />
         ) : (
           <div className="rounded-[var(--radius)] border border-dashed border-[var(--line)] bg-[var(--panel-strong)] p-4 text-sm text-[var(--muted)]">
-            先在上方解析 RSS，再创建订阅。
+            {t("subscription.needParse")}
           </div>
         )}
 
@@ -88,6 +91,7 @@ function CreateFromPreview({
   preview: RssPreview;
   defaultIncomingPath?: string;
 }) {
+  const { t } = useI18n();
   const defaultName = preview.title ?? "";
   const defaultSeason = String(preview.seasons[0] ?? 1);
   const storageKey = `aniflow:rss-preview-filters:${preview.url}`;
@@ -175,8 +179,8 @@ function CreateFromPreview({
 
   const previewRows = useMemo(
     () =>
-      previewItems.map((item) => previewDecision(item, filters)),
-    [previewItems, filters]
+      previewItems.map((item) => previewDecision(item, filters, t)),
+    [previewItems, filters, t]
   );
   const matchedRows = previewRows.filter((row) => row.downloadable);
   const hasFilters = facetKeys.some((key) => Boolean(filters[key]));
@@ -196,14 +200,14 @@ function CreateFromPreview({
       <input type="hidden" name="rssUrl" value={preview.url} />
       <div className="grid gap-2 md:grid-cols-2">
         <EditableField
-          label="名称"
+          label={t("subscription.name")}
           name="name"
           value={name}
           onChange={(value) => setName(value)}
           required
         />
         <EditableField
-          label="季号"
+          label={t("subscription.season")}
           name="seasonNumber"
           value={seasonNumber}
           onChange={(value) => setSeasonNumber(value)}
@@ -214,40 +218,40 @@ function CreateFromPreview({
         />
       </div>
       <p className="text-xs leading-5 text-[var(--muted)]">
-        下载目录默认按订阅拆分：
+        {t("subscription.incomingHintBefore")}
         <span className="ml-1 font-medium text-[var(--text)] data-digits">
           {buildSubscriptionIncomingPath(
             defaultIncomingPath || "/115/Anime/_incoming",
-            name || "订阅名"
+            name || t("subscription.namePlaceholder")
           )}
         </span>
-        。可在创建后编辑覆盖。
+        {t("subscription.incomingHintAfter")}
       </p>
       <div className="grid gap-2 lg:grid-cols-[1fr_auto] lg:items-end">
         <div className="grid gap-2 md:grid-cols-3">
           <SelectField
-            label="字幕组"
+            label={t("subscription.group")}
             name="releaseGroup"
             values={groupOptions}
             value={filters.releaseGroup}
             onChange={(value) => updateFilter("releaseGroup", value)}
-            placeholder="未选择字幕组"
+            placeholder={t("subscription.pickGroup")}
           />
           <SelectField
-            label="分辨率"
+            label={t("subscription.resolution")}
             name="resolution"
             values={resolutionOptions}
             value={filters.resolution}
             onChange={(value) => updateFilter("resolution", value)}
-            placeholder="未选择分辨率"
+            placeholder={t("subscription.pickResolution")}
           />
           <SelectField
-            label="字幕语言"
+            label={t("subscription.language")}
             name="subtitleLanguage"
             values={languageOptions}
             value={filters.subtitleLanguage}
             onChange={(value) => updateFilter("subtitleLanguage", value)}
-            placeholder="未选择字幕语言"
+            placeholder={t("subscription.pickLanguage")}
           />
         </div>
         <Button
@@ -258,7 +262,7 @@ function CreateFromPreview({
           onClick={() => setFilters(emptyFilters)}
         >
           <X className="size-4" />
-          清空筛选
+          {t("subscription.clearFilters")}
         </Button>
       </div>
       <FilterPreview
@@ -272,11 +276,11 @@ function CreateFromPreview({
       <div className="flex flex-wrap items-center gap-4 text-sm">
         <label className="flex items-center gap-2">
           <input type="checkbox" name="autoDownload" value="1" defaultChecked />
-          自动离线
+          {t("subscription.autoDownload")}
         </label>
         <Button type="submit" variant="signal" disabled={!canCreate}>
           <Plus className="size-4" />
-          创建订阅
+          {t("subscription.create")}
         </Button>
       </div>
     </form>
@@ -290,6 +294,7 @@ function ExistingSubscriptions({
   subscriptions: Subscription[];
   rules: FilterRule[];
 }) {
+  const { t } = useI18n();
   const [editingId, setEditingId] = useState<number | null>(null);
   const activeSubscriptions = subscriptions.filter(
     (subscription) => subscription.enabled
@@ -301,12 +306,12 @@ function ExistingSubscriptions({
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-sm font-medium">追更中</div>
+        <div className="text-sm font-medium">{t("subscription.tracking")}</div>
         <Badge variant="muted">{activeSubscriptions.length}</Badge>
       </div>
       {activeSubscriptions.length === 0 ? (
         <div className="rounded-[var(--radius)] border border-dashed border-[var(--line)] p-4 text-sm text-[var(--muted)]">
-          暂无追更中的订阅。
+          {t("subscription.noTracking")}
         </div>
       ) : (
         <SubscriptionGroup
@@ -323,7 +328,7 @@ function ExistingSubscriptions({
         <details className="group border-t border-[var(--line)] pt-4">
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-sm font-medium [&::-webkit-details-marker]:hidden">
             <span className="flex items-center gap-2">
-              已归档
+              {t("subscription.archived")}
               <Badge variant="muted">{archivedSubscriptions.length}</Badge>
             </span>
             <ChevronDown className="size-4 text-[var(--muted)] transition-transform group-open:rotate-180" />
@@ -381,6 +386,7 @@ function SubscriptionItem({
   isEditing: boolean;
   onToggleEdit: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-muted)] p-3 text-sm shadow-[var(--shadow)] transition-colors hover:border-[var(--line-strong)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -396,7 +402,7 @@ function SubscriptionItem({
           </div>
           <Button type="button" variant="outline" size="sm" onClick={onToggleEdit}>
             {isEditing ? <X /> : <Pencil />}
-            {isEditing ? "收起" : "编辑"}
+            {isEditing ? t("common.collapse") : t("common.edit")}
           </Button>
           <form
             action={
@@ -412,7 +418,7 @@ function SubscriptionItem({
               size="sm"
             >
               {subscription.enabled ? <Archive /> : <ArchiveRestore />}
-              {subscription.enabled ? "归档" : "恢复追更"}
+              {subscription.enabled ? t("subscription.archive") : t("subscription.restore")}
             </Button>
           </form>
           <DeleteSubscriptionDialog subscription={subscription} />
@@ -431,6 +437,7 @@ function DeleteSubscriptionDialog({
 }: {
   subscription: Subscription;
 }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [cleanupIncoming, setCleanupIncoming] = useState(false);
 
@@ -445,14 +452,14 @@ function DeleteSubscriptionDialog({
       <DialogTrigger asChild>
         <Button type="button" variant="danger" size="sm">
           <Trash2 />
-          删除
+          {t("common.delete")}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>删除订阅</DialogTitle>
+          <DialogTitle>{t("subscription.deleteTitle")}</DialogTitle>
           <DialogDescription>
-            确认删除「{subscription.name}」？此操作不可撤销。
+            {t("subscription.deleteConfirm", { name: subscription.name })}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -472,10 +479,10 @@ function DeleteSubscriptionDialog({
             />
             <span className="grid gap-1">
               <span className="font-medium text-[var(--foreground)]">
-                同时清下载残留
+                {t("subscription.cleanupTitle")}
               </span>
               <span className="text-xs leading-5 text-[var(--muted)]">
-                清理该订阅下载目录中可明确匹配的残留文件。媒体库文件不会被删除。
+                {t("subscription.cleanupHelp")}
               </span>
             </span>
           </label>
@@ -485,11 +492,11 @@ function DeleteSubscriptionDialog({
               variant="outline"
               onClick={() => setOpen(false)}
             >
-              取消
+              {t("common.cancel")}
             </Button>
             <Button type="submit" variant="danger">
               <Trash2 />
-              {cleanupIncoming ? "删除并清理" : "确认删除"}
+              {cleanupIncoming ? t("subscription.deleteAndCleanup") : t("subscription.confirmDelete")}
             </Button>
           </div>
         </form>
@@ -505,16 +512,17 @@ function SubscriptionSummary({
   subscription: Subscription;
   rules: FilterRule[];
 }) {
+  const { t } = useI18n();
   return (
     <div className="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
-      <span>{subscription.enabled ? "追更中" : "已归档"}</span>
-      <span>{subscription.autoDownload ? "自动离线" : "仅发现"}</span>
+      <span>{subscription.enabled ? t("subscription.tracking") : t("subscription.archived")}</span>
+      <span>{subscription.autoDownload ? t("subscription.autoDownload") : t("subscription.discoverOnly")}</span>
       <span className="data-digits">
-        {subscription.incomingPath?.trim() || "按订阅名自动拆分下载目录"}
+        {subscription.incomingPath?.trim() || t("subscription.autoIncoming")}
       </span>
-      <RuleBadge label="字幕组" value={coreRuleValue(rules, "group_allow")} />
-      <RuleBadge label="分辨率" value={coreRuleValue(rules, "resolution_allow")} />
-      <RuleBadge label="字幕语言" value={coreRuleValue(rules, "language_allow")} />
+      <RuleBadge label={t("subscription.group")} value={coreRuleValue(rules, "group_allow")} />
+      <RuleBadge label={t("subscription.resolution")} value={coreRuleValue(rules, "resolution_allow")} />
+      <RuleBadge label={t("subscription.language")} value={coreRuleValue(rules, "language_allow")} />
     </div>
   );
 }
@@ -535,6 +543,7 @@ function EditSubscriptionForm({
   subscription: Subscription;
   rules: FilterRule[];
 }) {
+  const { t } = useI18n();
   return (
     <form
       action={updateParsedSubscriptionAction}
@@ -543,7 +552,7 @@ function EditSubscriptionForm({
       <input type="hidden" name="id" value={subscription.id} />
       <div className="grid gap-2 md:grid-cols-2">
         <FormField
-          label="名称"
+          label={t("subscription.name")}
           name="name"
           defaultValue={subscription.name}
           required
@@ -555,7 +564,7 @@ function EditSubscriptionForm({
           required
         />
         <FormField
-          label="季号"
+          label={t("subscription.season")}
           name="seasonNumber"
           type="number"
           min={0}
@@ -564,27 +573,27 @@ function EditSubscriptionForm({
           required
         />
         <FormField
-          label="下载目录"
+          label={t("subscription.incomingPath")}
           name="incomingPath"
           defaultValue={subscription.incomingPath ?? ""}
-          placeholder="留空则按订阅名拆到全局下载根下"
+          placeholder={t("subscription.incomingPlaceholder")}
         />
       </div>
       <div className="grid gap-2 md:grid-cols-3">
         <FormField
-          label="字幕组"
+          label={t("subscription.group")}
           name="releaseGroup"
           defaultValue={coreRuleValue(rules, "group_allow")}
           required
         />
         <FormField
-          label="分辨率"
+          label={t("subscription.resolution")}
           name="resolution"
           defaultValue={coreRuleValue(rules, "resolution_allow")}
           required
         />
         <FormField
-          label="字幕语言"
+          label={t("subscription.language")}
           name="subtitleLanguage"
           defaultValue={coreRuleValue(rules, "language_allow")}
           required
@@ -598,11 +607,11 @@ function EditSubscriptionForm({
             value="1"
             defaultChecked={subscription.autoDownload}
           />
-          自动离线
+          {t("subscription.autoDownload")}
         </label>
         <Button type="submit" variant="signal">
           <Save className="size-4" />
-          保存订阅
+          {t("subscription.save")}
         </Button>
       </div>
     </form>
@@ -647,12 +656,13 @@ function SelectField({
   onChange?: (value: string) => void;
   placeholder?: string;
 }) {
+  const { t } = useI18n();
   if (values.length === 0) {
     return (
       <div className="grid gap-1.5">
         <Label>{label}</Label>
         <div className="flex h-9 items-center rounded-[var(--radius)] border border-dashed border-[var(--line)] bg-[var(--input)] px-3 text-sm text-[var(--muted)]">
-          未解析到候选值
+          {t("subscription.noCandidates")}
         </div>
       </div>
     );
@@ -669,7 +679,7 @@ function SelectField({
         }
         className="flex h-9 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
       >
-        <option value="">{placeholder ?? "未选择"}</option>
+        <option value="">{placeholder ?? t("subscription.notSelected")}</option>
         {values.map((option) => (
           <option key={option} value={option}>
             {option}
@@ -727,6 +737,7 @@ function FilterPreview({
   filters: FilterState;
   onFilterPick: (key: FacetKey, value: string) => void;
 }) {
+  const { t } = useI18n();
   const visibleRows = [...rows].sort(
     (left, right) => Number(right.downloadable) - Number(left.downloadable)
   );
@@ -734,9 +745,9 @@ function FilterPreview({
   return (
     <div className="grid gap-2 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] p-3">
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-        <div className="font-medium">当前条件预览</div>
+        <div className="font-medium">{t("subscription.previewTitle")}</div>
         <Badge variant={matchedCount > 0 ? "signal" : "amber"}>
-          {matchedCount}/{rows.length} 会自动离线
+          {t("subscription.previewMatch", { matched: matchedCount, total: rows.length })}
         </Badge>
       </div>
       <div className="grid gap-1.5">
@@ -748,7 +759,7 @@ function FilterPreview({
             <div className="truncate font-medium">{row.item.title}</div>
             <div className="flex flex-wrap gap-1.5 text-[var(--muted)]">
               <Badge variant={row.downloadable ? "signal" : "muted"}>
-                {row.downloadable ? "命中" : row.reasons.join(" / ")}
+                {row.downloadable ? t("subscription.hit") : row.reasons.join(" / ")}
               </Badge>
               {row.item.metadata.episodeNumber != null ? (
                 <span>
@@ -822,33 +833,48 @@ function previewDecision(
     releaseGroup: string;
     resolution: string;
     subtitleLanguage: string;
-  }
+  },
+  t: TranslateFn
 ): PreviewDecision {
   const reasons: string[] = [];
   if (
     !filters.releaseGroup ||
     !equalsLoose(item.metadata.releaseGroup, filters.releaseGroup)
   ) {
-    reasons.push(filters.releaseGroup ? "字幕组不匹配" : "未选择字幕组");
+    reasons.push(
+      filters.releaseGroup
+        ? t("subscription.reasonGroupMismatch")
+        : t("subscription.reasonGroupMissing")
+    );
   }
   if (
     !filters.resolution ||
     !equalsLoose(item.metadata.resolution, filters.resolution)
   ) {
-    reasons.push(filters.resolution ? "分辨率不匹配" : "未选择分辨率");
+    reasons.push(
+      filters.resolution
+        ? t("subscription.reasonResolutionMismatch")
+        : t("subscription.reasonResolutionMissing")
+    );
   }
   if (
     !filters.subtitleLanguage ||
     !equalsLoose(item.metadata.subtitleLanguage, filters.subtitleLanguage)
   ) {
-    reasons.push(filters.subtitleLanguage ? "字幕语言不匹配" : "未选择字幕语言");
+    reasons.push(
+      filters.subtitleLanguage
+        ? t("subscription.reasonLanguageMismatch")
+        : t("subscription.reasonLanguageMissing")
+    );
   }
-  if (!item.downloadUrl) reasons.push("无下载链接");
-  if (item.metadata.episodeNumber == null) reasons.push("未解析集数");
+  if (!item.downloadUrl) reasons.push(t("subscription.reasonNoUrl"));
+  if (item.metadata.episodeNumber == null) {
+    reasons.push(t("subscription.reasonNoEpisode"));
+  }
   return {
     item,
     downloadable: reasons.length === 0,
-    reasons: reasons.length > 0 ? reasons : ["命中"]
+    reasons: reasons.length > 0 ? reasons : [t("subscription.hit")]
   };
 }
 
