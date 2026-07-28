@@ -25,7 +25,6 @@ import {
 import type { RuleType, SystemSettings, WorkerTaskType } from "@/lib/db/types";
 import {
   confirmJob,
-  reorganizeJob,
   retryJob
 } from "@/lib/worker/pipeline";
 import { kickWorkerTaskRunner } from "@/lib/worker/tasks";
@@ -39,30 +38,9 @@ import { getDictionary } from "@/lib/i18n/server";
 import { RUNTIME_RESET_CONFIRM_PHRASE } from "@/lib/runtime-reset";
 import { toBool } from "@/lib/utils";
 import { isMikanDownloadUrl, isMikanRssUrl } from "@/lib/net/url-policy";
-import {
-  buildSubscriptionIncomingPath,
-  isRemotePathWithin,
-  joinRemotePath,
-  resolveSubscriptionIncomingPath
-} from "@/lib/utils/path";
 
 const mikanRssUrlSchema = z.string().url().refine(isMikanRssUrl, {
   message: "Only mikanani.me/RSS/ feed URLs are supported"
-});
-
-const subscriptionSchema = z.object({
-  id: z.coerce.number().optional(),
-  name: z.string().min(1),
-  rssUrl: mikanRssUrlSchema,
-  enabled: z.boolean(),
-  autoDownload: z.boolean(),
-  seasonNumber: z.coerce.number().int().min(0).max(99),
-  destinationRoot: z.string().min(1),
-  incomingPath: z.string().optional(),
-  tmdbSeriesId: z
-    .union([z.literal(""), z.coerce.number().int().positive()])
-    .optional()
-    .transform((value) => (value === "" || value == null ? null : Number(value)))
 });
 
 const parsedSubscriptionSchema = z.object({
@@ -72,7 +50,6 @@ const parsedSubscriptionSchema = z.object({
   resolution: z.string().min(1),
   subtitleLanguage: z.string().min(1),
   seasonNumber: z.coerce.number().int().min(0).max(99),
-  incomingPath: z.string().optional(),
   autoDownload: z.boolean()
 });
 
@@ -109,10 +86,7 @@ const settingsSchema = z.object({
   proxyUrl: z.string().optional().default("http://127.0.0.1:7890"),
   tmdbBearerToken: z.string().optional().default(""),
   workerIntervalSeconds: z.coerce.number().int().min(30).max(86400),
-  downloadTimeoutMinutes: z.coerce.number().int().min(1).max(24 * 60),
-  downloadAutoRetryEnabled: z.boolean().default(true),
-  downloadAutoRetryMaxAttempts: z.coerce.number().int().min(1).max(20),
-  downloadAutoRetryCooldownMinutes: z.coerce.number().int().min(1).max(24 * 60)
+  downloadTimeoutMinutes: z.coerce.number().int().min(1).max(24 * 60)
 });
 
 const manualEpisodeSchema = z.object({
@@ -125,42 +99,6 @@ const manualEpisodeSchema = z.object({
   title: z.string().trim().optional().default("")
 });
 
-export async function saveSubscriptionAction(formData: FormData) {
-  const settings = getSystemSettings();
-  const parsed = subscriptionSchema.parse({
-    id: formData.get("id") || undefined,
-    name: formData.get("name"),
-    rssUrl: formData.get("rssUrl"),
-    enabled: toBool(formData.get("enabled")),
-    autoDownload: toBool(formData.get("autoDownload")),
-    seasonNumber: formData.get("seasonNumber"),
-    destinationRoot: formData.get("destinationRoot"),
-    incomingPath: formData.get("incomingPath")?.toString() || undefined,
-    tmdbSeriesId: formData.get("tmdbSeriesId")?.toString() ?? ""
-  });
-
-  const existing = parsed.id ? getSubscription(parsed.id) : null;
-  const incomingPath = resolveSubscriptionIncomingPathInput({
-    name: parsed.name,
-    incomingPath: parsed.incomingPath,
-    incomingRoot: settings.openlistIncomingPath,
-    previousName: existing?.name,
-    previousIncomingPath: existing?.incomingPath
-  });
-
-  if (parsed.id) {
-    updateSubscription(parsed.id, { ...parsed, incomingPath });
-  } else {
-    const subscription = createSubscription({ ...parsed, incomingPath });
-    if (subscription) {
-      enqueueAndKickWorkerTask("poll_subscription", subscription.id);
-    }
-  }
-
-  revalidatePath("/");
-  revalidatePath("/subscriptions");
-}
-
 export async function createParsedSubscriptionAction(formData: FormData) {
   const settings = getSystemSettings();
   const parsed = parsedSubscriptionSchema.parse({
@@ -170,7 +108,6 @@ export async function createParsedSubscriptionAction(formData: FormData) {
     resolution: optionalFormString(formData.get("resolution")),
     subtitleLanguage: optionalFormString(formData.get("subtitleLanguage")),
     seasonNumber: formData.get("seasonNumber") ?? 1,
-    incomingPath: optionalFormString(formData.get("incomingPath")),
     autoDownload: toBool(formData.get("autoDownload"))
   });
 
@@ -181,11 +118,7 @@ export async function createParsedSubscriptionAction(formData: FormData) {
     autoDownload: parsed.autoDownload,
     seasonNumber: parsed.seasonNumber,
     destinationRoot: settings.mediaLibraryRoot,
-    incomingPath: resolveSubscriptionIncomingPathInput({
-      name: parsed.name,
-      incomingPath: parsed.incomingPath,
-      incomingRoot: settings.openlistIncomingPath
-    })
+    incomingPath: null
   });
 
   if (subscription) {
@@ -217,7 +150,6 @@ export async function updateParsedSubscriptionAction(formData: FormData) {
     resolution: optionalFormString(formData.get("resolution")),
     subtitleLanguage: optionalFormString(formData.get("subtitleLanguage")),
     seasonNumber: formData.get("seasonNumber") ?? 1,
-    incomingPath: optionalFormString(formData.get("incomingPath")),
     autoDownload: toBool(formData.get("autoDownload"))
   });
 
@@ -228,13 +160,8 @@ export async function updateParsedSubscriptionAction(formData: FormData) {
     autoDownload: parsed.autoDownload,
     seasonNumber: parsed.seasonNumber,
     destinationRoot: existing.destinationRoot || settings.mediaLibraryRoot,
-    incomingPath: resolveSubscriptionIncomingPathInput({
-      name: parsed.name,
-      incomingPath: parsed.incomingPath,
-      incomingRoot: settings.openlistIncomingPath,
-      previousName: existing.name,
-      previousIncomingPath: existing.incomingPath
-    }),
+    // Legacy value is retained for database compatibility but no longer used.
+    incomingPath: existing.incomingPath,
     tmdbSeriesId: existing.tmdbSeriesId
   });
 
@@ -288,30 +215,6 @@ export async function deleteRuleAction(formData: FormData) {
 export async function deleteSubscriptionAction(formData: FormData) {
   const id = Number(formData.get("id"));
   if (Number.isFinite(id)) {
-    const subscription = getSubscription(id);
-    if (subscription && toBool(formData.get("cleanupIncoming"))) {
-      const settings = getSystemSettings();
-      enqueueWorkerTask({
-        type: "cleanup_subscription_incoming",
-        payload: {
-          dedupeKey: `cleanup-subscription-incoming:${subscription.id}`,
-          subscriptionName: subscription.name,
-          incomingPath: resolveSubscriptionIncomingPath({
-            incomingRoot: settings.openlistIncomingPath,
-            subscriptionName: subscription.name,
-            incomingPath: subscription.incomingPath
-          }),
-          rules: listRules(subscription.id)
-            .filter((rule) => rule.enabled)
-            .map((rule) => ({
-              type: rule.type,
-              value: rule.value,
-              enabled: rule.enabled
-            }))
-        }
-      });
-      kickWorkerTaskRunner();
-    }
     deleteSubscription(id);
   }
   revalidatePath("/");
@@ -365,13 +268,6 @@ export async function retryJobAction(formData: FormData) {
   revalidatePath("/");
 }
 
-/** Only re-scan/re-organize; do not re-submit offline download. */
-export async function reorganizeJobAction(formData: FormData) {
-  const id = Number(formData.get("id"));
-  if (Number.isFinite(id)) await reorganizeJob(id);
-  revalidatePath("/");
-}
-
 export async function confirmJobAction(formData: FormData) {
   const id = Number(formData.get("id"));
   if (Number.isFinite(id)) await confirmJob(id);
@@ -389,7 +285,6 @@ export async function manualSupplementEpisodeAction(formData: FormData) {
   const subscription = getSubscription(parsed.subscriptionId);
   if (!subscription) return;
 
-  const settings = getSystemSettings();
   const rules = listRules(subscription.id).filter((rule) => rule.enabled);
   const releaseGroup = coreRuleValue(rules, "group_allow");
   const resolution = coreRuleValue(rules, "resolution_allow");
@@ -448,11 +343,6 @@ export async function manualSupplementEpisodeAction(formData: FormData) {
     feedItemId: feedItem.id,
     status: "queued",
     sourceUrl: parsed.sourceUrl,
-    targetPath: resolveSubscriptionIncomingPath({
-      incomingRoot: settings.openlistIncomingPath,
-      subscriptionName: subscription.name,
-      incomingPath: subscription.incomingPath
-    }),
     errorMessage: null
   });
   enqueueAndKickWorkerTask("submit_queued");
@@ -531,12 +421,7 @@ function parseSettingsForm(formData: FormData): SystemSettings {
     proxyUrl: formData.get("proxyUrl")?.toString() ?? "http://127.0.0.1:7890",
     tmdbBearerToken: formData.get("tmdbBearerToken")?.toString() ?? "",
     workerIntervalSeconds: formData.get("workerIntervalSeconds") ?? 300,
-    downloadTimeoutMinutes: formData.get("downloadTimeoutMinutes") ?? 30,
-    downloadAutoRetryEnabled: toBool(formData.get("downloadAutoRetryEnabled")),
-    downloadAutoRetryMaxAttempts:
-      formData.get("downloadAutoRetryMaxAttempts") ?? 3,
-    downloadAutoRetryCooldownMinutes:
-      formData.get("downloadAutoRetryCooldownMinutes") ?? 10
+    downloadTimeoutMinutes: formData.get("downloadTimeoutMinutes") ?? 30
   }) satisfies SystemSettings;
   return parsed;
 }
@@ -630,57 +515,6 @@ function manualEpisodeTitle({
     .map((value) => `[${value}]`)
     .join("");
   return `${prefix}${subscriptionName} - ${episodeText}${revisionSuffix}${tags}`;
-}
-
-/**
- * Prefer an explicit path; otherwise isolate under the global incoming root
- * by subscription name. If the form still submits only the global root (legacy
- * create flow), also split by name. When renaming and the path was the old
- * auto path, follow the new name.
- */
-function resolveSubscriptionIncomingPathInput(params: {
-  name: string;
-  incomingPath?: string | null;
-  incomingRoot: string;
-  previousName?: string;
-  previousIncomingPath?: string | null;
-}) {
-  const root = joinRemotePath(params.incomingRoot);
-  const explicit = params.incomingPath?.trim();
-  const autoForName = buildSubscriptionIncomingPath(root, params.name);
-  const previousAuto = params.previousName
-    ? buildSubscriptionIncomingPath(root, params.previousName)
-    : null;
-  const previousStored = params.previousIncomingPath?.trim()
-    ? joinRemotePath(params.previousIncomingPath)
-    : null;
-
-  if (!explicit) return autoForName;
-
-  const explicitPath = joinRemotePath(explicit);
-
-  if (!isRemotePathWithin(explicitPath, root)) {
-    throw new Error(
-      `Subscription download path must stay under the global incoming root ${root}`
-    );
-  }
-
-  // Legacy create sent the shared root as the default path.
-  if (explicitPath === root) return autoForName;
-
-  // Renamed subscription still pointing at the previous auto path → follow name.
-  if (
-    previousAuto &&
-    previousStored &&
-    explicitPath === previousAuto &&
-    previousStored === previousAuto &&
-    params.previousName &&
-    params.previousName !== params.name
-  ) {
-    return autoForName;
-  }
-
-  return explicitPath;
 }
 
 function optionalFormString(value: FormDataEntryValue | null) {

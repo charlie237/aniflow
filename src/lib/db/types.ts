@@ -201,12 +201,6 @@ export interface SystemSettings {
   workerIntervalSeconds: number;
   /** Minutes a job may stay in "downloading" before being marked failed. */
   downloadTimeoutMinutes: number;
-  /** Auto re-queue failed download jobs (submit / timeout / OpenList errors). */
-  downloadAutoRetryEnabled: boolean;
-  /** Max submit attempts per job (includes the first try). */
-  downloadAutoRetryMaxAttempts: number;
-  /** Minutes to wait after a failure before auto-retry. */
-  downloadAutoRetryCooldownMinutes: number;
 }
 
 export interface DashboardData {

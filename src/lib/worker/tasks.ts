@@ -7,8 +7,6 @@ import {
 } from "@/lib/db/repositories";
 import type { WorkerTask } from "@/lib/db/types";
 import {
-  cleanupDeletedSubscriptionIncoming,
-  type DeletedSubscriptionIncomingCleanup,
   pollAllSubscriptions,
   pollSubscription,
   reconcileDownloadingJobs,
@@ -82,9 +80,10 @@ async function runWorkerTask(
         task.subscriptionId
       )) as unknown as Record<string, unknown>;
     case "cleanup_subscription_incoming":
-      return (await cleanupDeletedSubscriptionIncoming(
-        parseCleanupPayload(task.payloadJson)
-      )) as unknown as Record<string, unknown>;
+      return {
+        skipped: true,
+        reason: "Automatic incoming cleanup is disabled; clean OpenList manually"
+      };
     case "scan_incoming":
       await scanAndRenameIncoming();
       await reconcileDownloadingJobs();
@@ -102,34 +101,4 @@ function summarizeResult(result: Record<string, unknown> | void) {
   } catch {
     return "";
   }
-}
-
-function parseCleanupPayload(payloadJson: string): DeletedSubscriptionIncomingCleanup {
-  const payload = JSON.parse(payloadJson) as {
-    subscriptionName?: unknown;
-    incomingPath?: unknown;
-    rules?: Array<{
-      type?: unknown;
-      value?: unknown;
-      enabled?: unknown;
-    }>;
-  };
-  if (
-    typeof payload.subscriptionName !== "string" ||
-    typeof payload.incomingPath !== "string"
-  ) {
-    throw new Error("Invalid cleanup subscription payload");
-  }
-
-  return {
-    subscriptionName: payload.subscriptionName,
-    incomingPath: payload.incomingPath,
-    rules: (payload.rules ?? [])
-      .filter((rule) => typeof rule.type === "string" && typeof rule.value === "string")
-      .map((rule) => ({
-        type: rule.type as DeletedSubscriptionIncomingCleanup["rules"][number]["type"],
-        value: String(rule.value),
-        enabled: rule.enabled !== false
-      }))
-  };
 }

@@ -204,41 +204,6 @@ export function SettingsForm({
               max={1440}
               help={t("settings.downloadTimeoutHelp")}
             />
-            <label className="flex items-start gap-2 text-sm md:col-span-2">
-              <input
-                className="mt-1"
-                type="checkbox"
-                name="downloadAutoRetryEnabled"
-                value="1"
-                defaultChecked={settings.downloadAutoRetryEnabled}
-              />
-              <span>
-                <span className="block font-medium">
-                  {t("settings.autoRetryTitle")}
-                </span>
-                <span className="mt-1 block text-xs leading-5 text-[var(--muted)]">
-                  {t("settings.autoRetryHelp")}
-                </span>
-              </span>
-            </label>
-            <Field
-              label={t("settings.maxAttempts")}
-              name="downloadAutoRetryMaxAttempts"
-              defaultValue={String(settings.downloadAutoRetryMaxAttempts)}
-              type="number"
-              min={1}
-              max={20}
-              help={t("settings.maxAttemptsHelp")}
-            />
-            <Field
-              label={t("settings.retryCooldown")}
-              name="downloadAutoRetryCooldownMinutes"
-              defaultValue={String(settings.downloadAutoRetryCooldownMinutes)}
-              type="number"
-              min={1}
-              max={1440}
-              help={t("settings.retryCooldownHelp")}
-            />
             <div className="md:col-span-2">
               <Button variant="signal" type="submit">
                 <Save className="size-4" />

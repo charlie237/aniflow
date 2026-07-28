@@ -43,19 +43,16 @@ import { Label } from "@/components/ui/label";
 import type { FilterRule, Subscription } from "@/lib/db/types";
 import type { RssPreview } from "@/lib/rss/preview";
 import { dateMs } from "@/lib/time";
-import { buildSubscriptionIncomingPath } from "@/lib/utils/path";
 import type { TranslateFn } from "@/lib/i18n";
 
 export function SubscriptionForm({
   subscriptions,
   rules,
-  preview,
-  defaultIncomingPath
+  preview
 }: {
   subscriptions: Subscription[];
   rules: FilterRule[];
   preview?: RssPreview | null;
-  defaultIncomingPath?: string;
 }) {
   const { t } = useI18n();
   return (
@@ -68,7 +65,7 @@ export function SubscriptionForm({
       </CardHeader>
       <CardContent className="grid gap-5">
         {preview ? (
-          <CreateFromPreview preview={preview} defaultIncomingPath={defaultIncomingPath} />
+          <CreateFromPreview preview={preview} />
         ) : (
           <div className="rounded-[var(--radius)] border border-dashed border-[var(--line)] bg-[var(--panel-strong)] p-4 text-sm text-[var(--muted)]">
             {t("subscription.needParse")}
@@ -84,13 +81,7 @@ export function SubscriptionForm({
   );
 }
 
-function CreateFromPreview({
-  preview,
-  defaultIncomingPath
-}: {
-  preview: RssPreview;
-  defaultIncomingPath?: string;
-}) {
+function CreateFromPreview({ preview }: { preview: RssPreview }) {
   const { t } = useI18n();
   const defaultName = preview.title ?? "";
   const defaultSeason = String(preview.seasons[0] ?? 1);
@@ -217,16 +208,6 @@ function CreateFromPreview({
           required
         />
       </div>
-      <p className="text-xs leading-5 text-[var(--muted)]">
-        {t("subscription.incomingHintBefore")}
-        <span className="ml-1 font-medium text-[var(--text)] data-digits">
-          {buildSubscriptionIncomingPath(
-            defaultIncomingPath || "/115/Anime/_incoming",
-            name || t("subscription.namePlaceholder")
-          )}
-        </span>
-        {t("subscription.incomingHintAfter")}
-      </p>
       <div className="grid gap-2 lg:grid-cols-[1fr_auto] lg:items-end">
         <div className="grid gap-2 md:grid-cols-3">
           <SelectField
@@ -439,15 +420,11 @@ function DeleteSubscriptionDialog({
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const [cleanupIncoming, setCleanupIncoming] = useState(false);
 
   return (
     <Dialog
       open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) setCleanupIncoming(false);
-      }}
+      onOpenChange={setOpen}
     >
       <DialogTrigger asChild>
         <Button type="button" variant="danger" size="sm">
@@ -468,24 +445,6 @@ function DeleteSubscriptionDialog({
           onSubmit={() => setOpen(false)}
         >
           <input type="hidden" name="id" value={subscription.id} />
-          <label className="flex cursor-pointer items-start gap-2.5 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-muted)] p-3 text-sm">
-            <input
-              type="checkbox"
-              name="cleanupIncoming"
-              value="1"
-              checked={cleanupIncoming}
-              onChange={(event) => setCleanupIncoming(event.target.checked)}
-              className="mt-0.5"
-            />
-            <span className="grid gap-1">
-              <span className="font-medium text-[var(--foreground)]">
-                {t("subscription.cleanupTitle")}
-              </span>
-              <span className="text-xs leading-5 text-[var(--muted)]">
-                {t("subscription.cleanupHelp")}
-              </span>
-            </span>
-          </label>
           <div className="flex flex-wrap justify-end gap-2">
             <Button
               type="button"
@@ -496,7 +455,7 @@ function DeleteSubscriptionDialog({
             </Button>
             <Button type="submit" variant="danger">
               <Trash2 />
-              {cleanupIncoming ? t("subscription.deleteAndCleanup") : t("subscription.confirmDelete")}
+              {t("subscription.confirmDelete")}
             </Button>
           </div>
         </form>
@@ -517,9 +476,6 @@ function SubscriptionSummary({
     <div className="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
       <span>{subscription.enabled ? t("subscription.tracking") : t("subscription.archived")}</span>
       <span>{subscription.autoDownload ? t("subscription.autoDownload") : t("subscription.discoverOnly")}</span>
-      <span className="data-digits">
-        {subscription.incomingPath?.trim() || t("subscription.autoIncoming")}
-      </span>
       <RuleBadge label={t("subscription.group")} value={coreRuleValue(rules, "group_allow")} />
       <RuleBadge label={t("subscription.resolution")} value={coreRuleValue(rules, "resolution_allow")} />
       <RuleBadge label={t("subscription.language")} value={coreRuleValue(rules, "language_allow")} />
@@ -571,12 +527,6 @@ function EditSubscriptionForm({
           max={99}
           defaultValue={String(subscription.seasonNumber)}
           required
-        />
-        <FormField
-          label={t("subscription.incomingPath")}
-          name="incomingPath"
-          defaultValue={subscription.incomingPath ?? ""}
-          placeholder={t("subscription.incomingPlaceholder")}
         />
       </div>
       <div className="grid gap-2 md:grid-cols-3">

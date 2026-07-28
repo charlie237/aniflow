@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   Eye,
   FileVideo,
-  FolderSync,
   PlayCircle,
   Plus,
   RotateCcw,
@@ -19,7 +18,6 @@ import {
 import {
   confirmJobAction,
   manualSupplementEpisodeAction,
-  reorganizeJobAction,
   retryJobAction
 } from "@/app/actions";
 import { useI18n } from "@/components/locale-provider";
@@ -362,17 +360,6 @@ export function EpisodeTable({
                               <RotateCcw className="size-4" />
                             </Button>
                           </form>
-                          <form action={reorganizeJobAction}>
-                            <input type="hidden" name="id" value={row.job.id} />
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              aria-label={t("episode.reorganize")}
-                              title={t("episode.reorganizeTitle")}
-                            >
-                              <FolderSync className="size-4" />
-                            </Button>
-                          </form>
                         </>
                       ) : null}
                       {row.job?.status === "needs_review" ||
@@ -592,20 +579,9 @@ function EpisodeDetails({ row }: { row: DashboardEpisodeRow }) {
               value={row.job?.status ? t(`status.job.${row.job.status}`) : null}
             />
             <DetailItem label={t("episode.detailOpenlist")} value={row.job?.openlistTaskId} mono />
-            <DetailItem label={t("episode.detailInfoHash")} value={row.job?.infoHash} mono />
-            <DetailItem label={t("episode.detailOfflineName")} value={row.job?.offlineName} mono />
             <DetailItem label={t("episode.detailDownload")} value={row.job?.sourceUrl} mono />
             <DetailItem label={t("episode.detailTarget")} value={row.job?.targetPath} mono />
             <DetailItem label={t("episode.detailAttempts")} value={row.job?.attempts.toString()} mono />
-            <DetailItem
-              label={t("episode.detailScanMisses")}
-              value={
-                row.job?.status === "waiting_file" || (row.job?.scanMissCount ?? 0) > 0
-                  ? String(row.job?.scanMissCount ?? 0)
-                  : null
-              }
-              mono
-            />
             <DetailItem label={t("episode.detailError")} value={row.job?.errorMessage} />
           </DetailSection>
 

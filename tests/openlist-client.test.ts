@@ -24,10 +24,7 @@ const settingsMock = vi.hoisted(() => ({
     proxyUrl: "http://127.0.0.1:7890",
     tmdbBearerToken: "",
     workerIntervalSeconds: 300,
-    downloadTimeoutMinutes: 30,
-    downloadAutoRetryEnabled: true,
-    downloadAutoRetryMaxAttempts: 3,
-    downloadAutoRetryCooldownMinutes: 10
+    downloadTimeoutMinutes: 30
   }
 }));
 

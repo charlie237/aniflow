@@ -7,7 +7,6 @@ import {
   listSubscriptions
 } from "@/lib/db/repositories";
 import { isMikanRssUrl } from "@/lib/net/url-policy";
-import { resolveSubscriptionIncomingPath } from "@/lib/utils/path";
 import { kickWorkerTaskRunner } from "@/lib/worker/tasks";
 
 const createSubscriptionSchema = z
@@ -18,6 +17,8 @@ const createSubscriptionSchema = z
     }),
     seasonNumber: z.coerce.number().int().min(0).max(99).optional(),
     destinationRoot: z.string().trim().min(1).optional(),
+    // Accepted for compatibility with older clients, but job-owned paths are
+    // now always derived from the download job id.
     incomingPath: z.string().trim().min(1).nullable().optional(),
     tmdbSeriesId: z.coerce.number().int().positive().nullable().optional()
   })
@@ -39,27 +40,13 @@ export async function POST(request: Request) {
   const body = parsed.data;
   const settings = getSystemSettings();
 
-  let incomingPath: string;
-  try {
-    incomingPath = resolveSubscriptionIncomingPath({
-      incomingRoot: settings.openlistIncomingPath,
-      subscriptionName: body.name,
-      incomingPath: body.incomingPath
-    });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Invalid incoming path" },
-      { status: 400 }
-    );
-  }
-
   try {
     const subscription = createSubscription({
       name: body.name,
       rssUrl: body.rssUrl,
       seasonNumber: body.seasonNumber ?? 1,
       destinationRoot: body.destinationRoot ?? settings.mediaLibraryRoot,
-      incomingPath,
+      incomingPath: null,
       tmdbSeriesId: body.tmdbSeriesId ?? null
     });
     if (subscription) {

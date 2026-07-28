@@ -124,7 +124,7 @@ const en = {
     types: {
       poll_all: "Sync & poll all",
       poll_subscription: "Sync & poll subscription",
-      cleanup_subscription_incoming: "Clean download leftovers",
+      cleanup_subscription_incoming: "Legacy auto-cleanup (disabled)",
       scan_incoming: "Scan & organize",
       submit_queued: "Submit download"
     },
@@ -151,9 +151,7 @@ const en = {
     colActions: "Actions",
     empty: "No rule-matched episodes yet.",
     retryDownload: "Retry download",
-    retryDownloadTitle: "Resubmit offline download",
-    reorganize: "Reorganize",
-    reorganizeTitle: "Scan and organize only — do not re-download",
+    retryDownloadTitle: "Clean the OpenList task and its job directory before resubmitting",
     confirmDownload: "Confirm download",
     confirmDownloadTitle: "Confirm and submit download",
     noFile: "No file found",
@@ -189,9 +187,6 @@ const en = {
     detailJob: "Download job",
     detailJobId: "Job",
     detailOpenlist: "OpenList task",
-    detailInfoHash: "Info hash",
-    detailOfflineName: "Offline name",
-    detailScanMisses: "Scan misses",
     detailTarget: "Target path",
     detailAttempts: "Attempts",
     detailError: "Error",
@@ -227,9 +222,6 @@ const en = {
     needParse: "Parse an RSS feed above before creating a subscription.",
     name: "Name",
     season: "Season",
-    incomingHintBefore: "Downloads default to a per-subscription folder:",
-    incomingHintAfter: "You can override it after create.",
-    namePlaceholder: "Subscription name",
     group: "Group",
     resolution: "Resolution",
     language: "Subtitles",
@@ -246,15 +238,8 @@ const en = {
     restore: "Resume tracking",
     deleteTitle: "Delete subscription",
     deleteConfirm: "Delete “{name}”? This cannot be undone.",
-    cleanupTitle: "Also clean download leftovers",
-    cleanupHelp:
-      "Remove clearly matched residual files under this subscription’s incoming path. Library media is never deleted.",
-    deleteAndCleanup: "Delete and clean",
     confirmDelete: "Confirm delete",
     discoverOnly: "Discover only",
-    autoIncoming: "Auto-split under global incoming by name",
-    incomingPath: "Incoming path",
-    incomingPlaceholder: "Leave blank to nest under global incoming by name",
     save: "Save subscription",
     noCandidates: "No candidates parsed",
     notSelected: "Not selected",
@@ -273,12 +258,12 @@ const en = {
   settings: {
     openlistTitle: "OpenList 115",
     openlistDescription:
-      "115 offline jobs land in the download directory, then are renamed and moved into the library path.",
+      "Each 115 offline task uses an exclusive job directory before validation, rename, and library move.",
     baseUrl: "OpenList URL",
     token: "OpenList token",
     incomingPath: "Download directory (global root)",
     incomingHelp:
-      "Global download root. New subscriptions default to a subfolder: {root}/{name}, so shows do not share one folder. The worker still scans the root and each subscription subfolder. Connectivity check syncs the root into OpenList backend config.",
+      "Global offline-download root. Every task exclusively uses root/jobs/job-id; the system never guesses ownership by filename or automatically deletes failed leftovers. Connectivity check syncs this root into OpenList backend config.",
     check115: "Sync OpenList & check 115",
     proxyTitle: "Proxy",
     proxyDescription:
@@ -313,15 +298,6 @@ const en = {
     downloadTimeout: "Download timeout (minutes)",
     downloadTimeoutHelp:
       "Jobs stuck in “Downloading” longer than this without finishing organize are marked failed. Default 30 minutes.",
-    autoRetryTitle: "Auto-retry failed downloads",
-    autoRetryHelp:
-      "After submit failure, 115/OpenList failure, or timeout, wait a cooldown then re-queue and clear the old task id. Stops after max attempts; manual retry still works.",
-    maxAttempts: "Max download attempts",
-    maxAttemptsHelp:
-      "Includes the first submit. 3 means up to 3 offline submissions.",
-    retryCooldown: "Retry cooldown (minutes)",
-    retryCooldownHelp:
-      "Minimum wait after failure before auto re-queue. Default 10 minutes.",
     save: "Save settings",
     maintenanceTitle: "Maintenance",
     maintenanceDescription:

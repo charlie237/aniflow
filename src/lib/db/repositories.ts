@@ -63,10 +63,7 @@ const defaultSystemSettings: SystemSettings = {
   proxyUrl: "http://127.0.0.1:7890",
   tmdbBearerToken: "",
   workerIntervalSeconds: 300,
-  downloadTimeoutMinutes: 30,
-  downloadAutoRetryEnabled: true,
-  downloadAutoRetryMaxAttempts: 3,
-  downloadAutoRetryCooldownMinutes: 10
+  downloadTimeoutMinutes: 30
 };
 
 export interface SubscriptionInput {
@@ -337,30 +334,6 @@ export function getSystemSettings(): SystemSettings {
           values.get("downloadTimeoutMinutes") ??
             defaultSystemSettings.downloadTimeoutMinutes
         ) || defaultSystemSettings.downloadTimeoutMinutes
-      )
-    ),
-    downloadAutoRetryEnabled: boolSetting(
-      values.get("downloadAutoRetryEnabled"),
-      defaultSystemSettings.downloadAutoRetryEnabled
-    ),
-    downloadAutoRetryMaxAttempts: Math.min(
-      20,
-      Math.max(
-        1,
-        Number(
-          values.get("downloadAutoRetryMaxAttempts") ??
-            defaultSystemSettings.downloadAutoRetryMaxAttempts
-        ) || defaultSystemSettings.downloadAutoRetryMaxAttempts
-      )
-    ),
-    downloadAutoRetryCooldownMinutes: Math.min(
-      24 * 60,
-      Math.max(
-        1,
-        Number(
-          values.get("downloadAutoRetryCooldownMinutes") ??
-            defaultSystemSettings.downloadAutoRetryCooldownMinutes
-        ) || defaultSystemSettings.downloadAutoRetryCooldownMinutes
       )
     )
   };
@@ -1022,112 +995,38 @@ export function updateJobStatus(
     .run();
 }
 
-/** One-shot: old "Bound… waiting for file" rows stuck as downloading. */
-export function migrateBoundDownloadingToWaitingFile() {
+/**
+ * One-shot compatibility: shared incoming directories cannot safely identify a
+ * file owner. Stop legacy in-flight jobs and require an explicit clean resubmit.
+ */
+export function migrateLegacyDownloadJobsToFailed() {
+  const jobsRoot = joinRemotePath(getSystemSettings().openlistIncomingPath, "jobs");
   return getSqlite()
     .prepare(
       `UPDATE download_jobs SET
-        status = 'waiting_file',
+        status = 'failed',
+        error_message = 'Legacy shared download directory is no longer supported; clean the OpenList task and files, then resubmit manually',
         updated_at = CURRENT_TIMESTAMP
-       WHERE status = 'downloading'
-         AND error_message IS NOT NULL
+       WHERE status IN ('downloading', 'waiting_file')
          AND (
-           error_message LIKE '%Bound existing OpenList offline task%'
-           OR error_message LIKE '%already in OpenList offline list%'
-           OR error_message LIKE '%OpenList offline task succeeded%'
-           OR error_message LIKE '%left active queue; waiting for file%'
+           status = 'waiting_file'
+           OR target_path IS NULL
+           OR target_path != ? || '/' || CAST(id AS TEXT)
          )`
     )
-    .run().changes;
-}
-
-/** Another in-flight job already bound to this OpenList offline task. */
-export function findJobByOpenlistTaskId(
-  openlistTaskId: string,
-  excludeJobId?: number
-) {
-  const rows = getDb()
-    .select()
-    .from(downloadJobs)
-    .where(eq(downloadJobs.openlistTaskId, openlistTaskId))
-    .all()
-    .map((row) => mapJob(row as unknown as Record<string, unknown>));
-  return (
-    rows.find(
-      (job) =>
-        job.id !== excludeJobId &&
-        ["queued", "downloading", "waiting_file", "ready_to_rename"].includes(
-          job.status
-        )
-    ) ?? null
-  );
-}
-
-/**
- * Atomically bind openlist_task_id to a job if no other in-flight job holds it.
- * Uses a transaction + conditional update to close check-then-act races.
- */
-export function tryClaimOpenlistTaskIdForJob(
-  jobId: number,
-  taskId: string,
-  fields?: {
-    status?: JobStatus;
-    infoHash?: string | null;
-    offlineName?: string | null;
-    errorMessage?: string | null;
-    scanMissCount?: number;
-  }
-): boolean {
-  const sqlite = getSqlite();
-  return sqlite.transaction(() => {
-    // Any non-terminal job already holding this task blocks the claim.
-    const owner = sqlite
-      .prepare(
-        `SELECT id FROM download_jobs
-         WHERE openlist_task_id = ?
-           AND id != ?
-           AND status NOT IN ('completed', 'skipped')
-         LIMIT 1`
-      )
-      .get(taskId, jobId) as { id: number } | undefined;
-    if (owner) return false;
-
-    const result = sqlite
-      .prepare(
-        `UPDATE download_jobs SET
-          openlist_task_id = ?,
-          status = COALESCE(?, status),
-          info_hash = COALESCE(?, info_hash),
-          offline_name = COALESCE(?, offline_name),
-          error_message = COALESCE(?, error_message),
-          scan_miss_count = COALESCE(?, scan_miss_count),
-          updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?
-           AND (openlist_task_id IS NULL OR openlist_task_id = ? OR openlist_task_id = '')`
-      )
-      .run(
-        taskId,
-        fields?.status ?? null,
-        fields?.infoHash ?? null,
-        fields?.offlineName ?? null,
-        fields?.errorMessage ?? null,
-        fields?.scanMissCount ?? null,
-        jobId,
-        taskId
-      );
-    return result.changes > 0;
-  })();
+    .run(jobsRoot).changes;
 }
 
 /**
  * Atomically claim a queued job for offline submit.
  * Returns false if another worker already took it (or status changed).
  */
-export function claimQueuedJob(jobId: number) {
+export function claimQueuedJob(jobId: number, targetPath?: string) {
   const result = getSqlite()
     .prepare(
       `UPDATE download_jobs SET
         status = 'downloading',
+        target_path = COALESCE(?, target_path),
         attempts = attempts + 1,
         error_message = CASE
           WHEN error_message IS NULL OR error_message = '' THEN 'Submitting offline download'
@@ -1137,25 +1036,13 @@ export function claimQueuedJob(jobId: number) {
        WHERE id = ?
          AND status = 'queued'`
     )
-    .run(jobId);
+    .run(targetPath ?? null, jobId);
   return result.changes > 0;
 }
 
-export function touchDownloadingJobActivity(jobId: number) {
-  return (
-    getSqlite()
-      .prepare(
-        `UPDATE download_jobs SET updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND status IN ('downloading', 'waiting_file')`
-      )
-      .run(jobId).changes > 0
-  );
-}
-
 /**
- * Time out stuck download / file-wait / rename jobs.
+ * Time out stuck download / rename jobs.
  * - downloading: OpenList still pulling
- * - waiting_file: offline task bound/done, media not adopted yet (longer grace)
  * - ready_to_rename: mid-organize
  */
 export function failStaleDownloadingJobs(
@@ -1166,7 +1053,6 @@ export function failStaleDownloadingJobs(
   const ageSeconds =
     maxAgeSeconds ??
     Math.max(1, getSystemSettings().downloadTimeoutMinutes) * 60;
-  const waitFileSeconds = Math.max(ageSeconds, ageSeconds * 2);
   const excludedIds = [...new Set(excludedJobIds.filter(Number.isInteger))];
   const exclusionSql = excludedIds.length
     ? ` AND id NOT IN (${excludedIds.map(() => "?").join(", ")})`
@@ -1179,7 +1065,6 @@ export function failStaleDownloadingJobs(
     .prepare(
       `UPDATE download_jobs SET
         status = 'failed',
-        openlist_task_id = NULL,
         error_message = ?,
         updated_at = CURRENT_TIMESTAMP
        WHERE status = 'downloading'
@@ -1193,24 +1078,6 @@ export function failStaleDownloadingJobs(
     .prepare(
       `UPDATE download_jobs SET
         status = 'failed',
-        openlist_task_id = NULL,
-        error_message = ?,
-        updated_at = CURRENT_TIMESTAMP
-       WHERE status = 'waiting_file'
-         AND datetime(updated_at) < datetime('now', ?)
-         ${exclusionSql}`
-    )
-    .run(
-      "Timed out waiting for media file after offline task completed",
-      `-${Math.max(60, waitFileSeconds)} seconds`,
-      ...excludedIds
-    ).changes;
-
-  changes += sqlite
-    .prepare(
-      `UPDATE download_jobs SET
-        status = 'failed',
-        openlist_task_id = NULL,
         error_message = ?,
         updated_at = CURRENT_TIMESTAMP
        WHERE status = 'ready_to_rename'
@@ -1224,53 +1091,6 @@ export function failStaleDownloadingJobs(
     ).changes;
 
   return changes;
-}
-
-export function requeueFailedDownloadJobs() {
-  const systemSettings = getSystemSettings();
-  if (!systemSettings.downloadAutoRetryEnabled) return 0;
-
-  const maxAttempts = Math.max(1, systemSettings.downloadAutoRetryMaxAttempts);
-  const cooldownMinutes = Math.max(1, systemSettings.downloadAutoRetryCooldownMinutes);
-
-  return getSqlite()
-    .prepare(
-      `UPDATE download_jobs SET
-        status = 'queued',
-        openlist_task_id = NULL,
-        error_message = CASE
-          WHEN error_message IS NULL OR error_message = '' THEN 'Auto-retry scheduled'
-          WHEN error_message LIKE '%(auto-retry)%' THEN error_message
-          ELSE error_message || ' (auto-retry)'
-        END,
-        updated_at = CURRENT_TIMESTAMP
-       WHERE status = 'failed'
-         AND source_url IS NOT NULL
-         AND TRIM(source_url) != ''
-         AND EXISTS (
-           SELECT 1 FROM subscriptions subscription
-           WHERE subscription.id = download_jobs.subscription_id
-             AND subscription.enabled = 1
-         )
-         AND attempts < ?
-         AND attempts > 0
-         AND datetime(updated_at) <= datetime('now', ?)
-         AND (
-           error_message IS NULL
-           OR (
-             error_message NOT LIKE '%Job has no source URL%'
-             AND error_message NOT LIKE '%Subscription no longer exists%'
-             AND error_message NOT LIKE '%Superseded by a newer release%'
-             -- OpenList already has this URL; re-submit only produces 10008.
-             AND error_message NOT LIKE '%10008%'
-             AND error_message NOT LIKE '%任务已存在%'
-             AND error_message NOT LIKE '%重复的链接%'
-             AND error_message NOT LIKE '%already in OpenList offline%'
-             AND error_message NOT LIKE '%already in the offline list%'
-           )
-         )`
-    )
-    .run(maxAttempts, `-${cooldownMinutes} minutes`).changes;
 }
 
 export function findFeedItemsForSubscription(subscriptionId: number) {
@@ -1682,7 +1502,6 @@ function getDashboardStats(
       inArray(downloadJobs.status, [
         "queued",
         "downloading",
-        "waiting_file",
         "ready_to_rename"
       ])
     )
@@ -1760,15 +1579,6 @@ function normalizeSystemSettings(input: SystemSettings): SystemSettings {
     downloadTimeoutMinutes: Math.min(
       24 * 60,
       Math.max(1, Number(input.downloadTimeoutMinutes || 30))
-    ),
-    downloadAutoRetryEnabled: Boolean(input.downloadAutoRetryEnabled),
-    downloadAutoRetryMaxAttempts: Math.min(
-      20,
-      Math.max(1, Number(input.downloadAutoRetryMaxAttempts || 3))
-    ),
-    downloadAutoRetryCooldownMinutes: Math.min(
-      24 * 60,
-      Math.max(1, Number(input.downloadAutoRetryCooldownMinutes || 10))
     )
   };
 }

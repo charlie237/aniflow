@@ -1,7 +1,6 @@
-import { CheckCircle2, FolderSync, RotateCcw } from "lucide-react";
+import { CheckCircle2, RotateCcw } from "lucide-react";
 import {
   confirmJobAction,
-  reorganizeJobAction,
   retryJobAction
 } from "@/app/actions";
 import { Button } from "@/components/ui/button";
@@ -83,30 +82,17 @@ export function JobTable({ jobs }: { jobs: DashboardData["jobs"] }) {
                   <TableCell>
                     <div className="flex justify-end gap-1">
                       {job.status === "failed" ? (
-                        <>
-                          <form action={retryJobAction}>
-                            <input type="hidden" name="id" value={job.id} />
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              aria-label="重新下载"
-                              title="重新提交离线下载"
-                            >
-                              <RotateCcw className="size-4" />
-                            </Button>
-                          </form>
-                          <form action={reorganizeJobAction}>
-                            <input type="hidden" name="id" value={job.id} />
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              aria-label="重新整理"
-                              title="只扫描整理，不重新下载"
-                            >
-                              <FolderSync className="size-4" />
-                            </Button>
-                          </form>
-                        </>
+                        <form action={retryJobAction}>
+                          <input type="hidden" name="id" value={job.id} />
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            aria-label="重新下载"
+                            title="请先清理 OpenList 任务和对应 job 目录，再重新提交"
+                          >
+                            <RotateCcw className="size-4" />
+                          </Button>
+                        </form>
                       ) : null}
                       {job.status === "needs_review" || job.status === "discovered" ? (
                         <form action={confirmJobAction}>

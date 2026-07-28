@@ -420,7 +420,7 @@ function statusSql(status: EpisodeStatusFilter) {
     return `job_status = 'needs_review'`;
   }
   // active
-  return `job_status IN ('queued', 'downloading', 'waiting_file', 'ready_to_rename')`;
+  return `job_status IN ('queued', 'downloading', 'ready_to_rename')`;
 }
 
 function mapDashboardRow(record: Record<string, unknown>): DashboardEpisodeRow {

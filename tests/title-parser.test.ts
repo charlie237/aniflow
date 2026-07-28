@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 import { parseReleaseTitle } from "@/lib/rss/title-parser";
 import {
   buildEpisodePath,
-  buildSubscriptionIncomingPath,
   isRemotePathWithin,
-  joinRemotePath,
-  resolveSubscriptionIncomingPath
+  joinRemotePath
 } from "@/lib/utils/path";
 
 describe("parseReleaseTitle", () => {
@@ -290,50 +288,7 @@ describe("buildEpisodePath", () => {
   });
 });
 
-describe("subscription incoming path", () => {
-  it("isolates each subscription under the global incoming root", () => {
-    expect(
-      buildSubscriptionIncomingPath("/115/Anime/_incoming", "葬送的芙莉莲")
-    ).toBe("/115/Anime/_incoming/葬送的芙莉莲");
-    expect(
-      buildSubscriptionIncomingPath("/115/Anime/_incoming", 'Show: "Name"/A')
-    ).toBe("/115/Anime/_incoming/Show Name A");
-  });
-
-  it("prefers an explicit path when set", () => {
-    expect(
-      resolveSubscriptionIncomingPath({
-        incomingRoot: "/115/Anime/_incoming",
-        subscriptionName: "Show",
-        incomingPath: "/115/Anime/_incoming/custom"
-      })
-    ).toBe("/115/Anime/_incoming/custom");
-    expect(
-      resolveSubscriptionIncomingPath({
-        incomingRoot: "/115/Anime/_incoming",
-        subscriptionName: "Show",
-        incomingPath: null
-      })
-    ).toBe("/115/Anime/_incoming/Show");
-  });
-
-  it("rejects explicit paths outside the global incoming root", () => {
-    expect(() =>
-      resolveSubscriptionIncomingPath({
-        incomingRoot: "/115/Anime/_incoming",
-        subscriptionName: "Show",
-        incomingPath: "/115/Anime"
-      })
-    ).toThrow(/global incoming root/i);
-    expect(() =>
-      resolveSubscriptionIncomingPath({
-        incomingRoot: "/115/Anime/_incoming",
-        subscriptionName: "Show",
-        incomingPath: "/115/Anime/_incoming/../library"
-      })
-    ).toThrow(/global incoming root/i);
-  });
-
+describe("remote path containment", () => {
   it("normalizes dot segments before checking containment", () => {
     expect(joinRemotePath("/115/Anime/_incoming/a/../b")).toBe(
       "/115/Anime/_incoming/b"
@@ -345,8 +300,5 @@ describe("subscription incoming path", () => {
       )
     ).toBe(true);
     expect(isRemotePathWithin("/115/Anime", "/")).toBe(true);
-    expect(buildSubscriptionIncomingPath("/115/Anime/_incoming", "..")).toBe(
-      "/115/Anime/_incoming/unnamed"
-    );
   });
 });

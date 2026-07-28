@@ -48,41 +48,6 @@ export function isRemotePathWithin(path: string, root: string) {
   );
 }
 
-/**
- * Per-subscription offline download directory under the global incoming root.
- * Example: root `/115/Anime/_incoming` + name `芙莉莲` → `/115/Anime/_incoming/芙莉莲`
- */
-export function buildSubscriptionIncomingPath(
-  incomingRoot: string,
-  subscriptionName: string
-) {
-  const segment = sanitizePathSegment(subscriptionName) || "unnamed";
-  return joinRemotePath(incomingRoot, segment);
-}
-
-/**
- * Resolve the offline download path for a subscription.
- * Explicit incomingPath wins; otherwise isolate under the global root by name.
- */
-export function resolveSubscriptionIncomingPath(params: {
-  incomingRoot: string;
-  subscriptionName: string;
-  incomingPath?: string | null;
-}) {
-  const root = joinRemotePath(params.incomingRoot);
-  const explicit = params.incomingPath?.trim();
-  if (explicit) {
-    const normalized = joinRemotePath(explicit);
-    if (!isRemotePathWithin(normalized, root)) {
-      throw new Error(
-        `Subscription incoming path must stay within the global incoming root: ${root}`
-      );
-    }
-    return normalized;
-  }
-  return buildSubscriptionIncomingPath(root, params.subscriptionName);
-}
-
 export function getExtension(path: string) {
   const match = path.match(/\.([a-z0-9]{2,6})(?:$|\?)/i);
   return match?.[1]?.toLowerCase() ?? null;
