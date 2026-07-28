@@ -11,6 +11,7 @@ import {
   createOrUpdateJob,
   failStaleDownloadingJobs,
   findMetadataBySubscription,
+  tryClaimOpenlistTaskIdForJob,
   getEpisodeFileForFeedItem,
   getFeedItem,
   getJob,
@@ -29,6 +30,7 @@ import {
   listSubscriptions,
   listVariantFeedItemIds,
   markJobAttempt,
+  migrateBoundDownloadingToWaitingFile,
   refreshWorkerLease,
   releaseWorkerLease,
   requeueFailedDownloadJobs,
@@ -45,6 +47,7 @@ import {
   ensureOpenListDirectory,
   isAlreadyInOfflineListErrorMessage,
   isOfflineTaskFailed,
+  isOfflineTaskSucceeded,
   isOpenListNotFoundError,
   listOfflineDownloadDone,
   listOfflineDownloadTransferUndone,
@@ -56,10 +59,15 @@ import {
   type OpenListFileEntry,
   type OpenListTask
 } from "@/lib/openlist/client";
+import { findOfflineTaskForSource } from "@/lib/openlist/offline-match";
 import { evaluateRules } from "@/lib/rules/engine";
 import { parseRss } from "@/lib/rss/parser";
 import { parseReleaseTitle } from "@/lib/rss/title-parser";
-import { resolveOfflineDownloadUrl } from "@/lib/torrent/magnet";
+import {
+  extractBtih,
+  extractMagnetDisplayName,
+  resolveOfflineDownloadUrl
+} from "@/lib/torrent/magnet";
 import {
   buildEpisodePath,
   buildSeasonLibraryPath,
@@ -73,6 +81,7 @@ import {
   resolveSubscriptionIncomingPath
 } from "@/lib/utils/path";
 import {
+  MIN_PATH_EVIDENCE_FOR_GROUP_MISMATCH,
   MIN_TRACKED_JOB_MATCH_SCORE,
   pickBestIncomingSubscriptionMatch,
   scoreIncomingSubscriptionMatch,
@@ -102,6 +111,17 @@ export interface DeletedSubscriptionIncomingCleanup {
 
 const INCOMING_MUTATION_LEASE = "incoming-mutation";
 const INCOMING_MUTATION_LEASE_SECONDS = 2 * 60 * 60;
+/** waiting_file jobs escalate to needs_review after this many unsuccessful scans. */
+const WAITING_FILE_MAX_SCAN_MISSES = 5;
+
+type RebindStats = { attempted: number; hit: number; miss: number; conflict: number };
+
+function emptyRebindStats(): RebindStats {
+  return { attempted: 0, hit: 0, miss: 0, conflict: 0 };
+}
+
+/** Per-tick rebind counters (logged once from reconcile). */
+let rebindStats = emptyRebindStats();
 
 export async function pollAllSubscriptions() {
   const totals: PipelineResult = {
@@ -279,9 +299,14 @@ async function pollSubscriptionFeed(subscriptionId: number): Promise<PipelineRes
       if (!isKnownUpgrade) {
         if (
           existingJob &&
-          ["discovered", "queued", "downloading", "ready_to_rename", "failed"].includes(
-            existingJob.status
-          )
+          [
+            "discovered",
+            "queued",
+            "downloading",
+            "waiting_file",
+            "ready_to_rename",
+            "failed"
+          ].includes(existingJob.status)
         ) {
           updateJobStatus(existingJob.id, "completed", {
             targetPath: libraryEpisode.path,
@@ -362,13 +387,23 @@ async function pollSubscriptionFeed(subscriptionId: number): Promise<PipelineRes
 
 /** Keep download lifecycle work independent from RSS polling success. */
 export async function runDownloadMaintenance() {
-  // Scan first so late files can complete failed/ready jobs before retries are queued.
-  await scanAndRenameIncoming();
+  const migrated = migrateBoundDownloadingToWaitingFile();
+  if (migrated > 0) {
+    console.log(
+      `[pipeline] migrated ${migrated} Bound/waiting downloading job(s) → waiting_file`
+    );
+  }
+  // Reconcile offline task state first so waiting_file vs downloading is accurate
+  // before scan-miss counters run (Codex P1: do not miss-count still-downloading jobs).
   await reconcileDownloadingJobs();
+  await scanAndRenameIncoming();
   await submitQueuedJobs();
 }
 
 export async function submitQueuedJobs() {
+  // 10008 / "任务已存在": OpenList already has the URL. Do not keep re-submitting;
+  // flip to downloading and try to adopt files already under _incoming.
+  await recoverAlreadyInOfflineListJobs();
   requeueFailedDownloadJobs();
   const jobs = listJobsByStatus(["queued"]);
   for (const job of jobs) {
@@ -377,17 +412,82 @@ export async function submitQueuedJobs() {
 }
 
 /**
- * Reconcile jobs stuck in "downloading":
- * - mark failed when OpenList reports task error
- * - mark failed when job is older than settings.downloadTimeoutMinutes with no completion
+ * Failed jobs whose only problem is "offline task already exists" still need
+ * file adoption via scan — re-adding the same URL will only 10008 again.
+ * Prefer rebinding openlistTaskId by magnet/URL so later ticks track by task ID.
+ */
+async function recoverAlreadyInOfflineListJobs() {
+  const failed = listJobsByStatus(["failed"]).filter(
+    (job) =>
+      job.errorMessage && isAlreadyInOfflineListErrorMessage(job.errorMessage)
+  );
+  if (failed.length === 0) return;
+
+  rebindStats = emptyRebindStats();
+  let tasks: OpenListTask[] = [];
+  try {
+    tasks = await listOfflineTasksForBinding();
+  } catch (error) {
+    console.warn(
+      `[pipeline] offline task list unavailable during recover: ${errorMessage(error)}`
+    );
+  }
+
+  let recovered = 0;
+  for (const job of failed) {
+    let taskId = job.openlistTaskId ? String(job.openlistTaskId) : null;
+    let infoHash = job.infoHash;
+    let offlineName = job.offlineName;
+    if (!taskId && tasks.length > 0 && (job.sourceUrl || job.infoHash)) {
+      const rebound = await rebindOfflineTaskId(job, tasks, { persist: false });
+      if (rebound) {
+        taskId = rebound.taskId;
+        infoHash = rebound.infoHash ?? infoHash;
+        offlineName = rebound.offlineName ?? offlineName;
+      }
+    }
+    markJobAttempt(
+      job.id,
+      {
+        status: "waiting_file",
+        openlistTaskId: taskId,
+        infoHash,
+        offlineName,
+        targetPath: job.targetPath,
+        errorMessage: taskId
+          ? `Bound existing OpenList offline task ${taskId}; waiting for file in download directory`
+          : "URL already in OpenList offline list; waiting for file in download directory"
+      },
+      { incrementAttempt: false }
+    );
+    recovered += 1;
+  }
+  console.log(
+    `[pipeline] recovering ${recovered} already-in-offline-list job(s) via task rebind + scan`
+  );
+  if (rebindStats.attempted > 0) {
+    console.log(
+      `[pipeline] recover rebind stats attempted=${rebindStats.attempted} hit=${rebindStats.hit} miss=${rebindStats.miss} conflict=${rebindStats.conflict}`
+    );
+  }
+  await scanAndRenameIncoming();
+}
+
+/**
+ * Reconcile jobs in downloading / waiting_file:
+ * - rebind missing openlistTaskId via magnet/hash
+ * - downloading = OpenList task still active
+ * - waiting_file = task bound/done, waiting for media under _incoming
+ * - mark failed on real task errors or timeouts
  *
- * Successful completion still happens via scanAndRenameIncoming when the media file appears.
+ * Completion still happens via scanAndRenameIncoming when the media file appears.
  */
 export async function reconcileDownloadingJobs() {
+  rebindStats = emptyRebindStats();
   const settings = getSystemSettings();
   const staleSeconds = Math.max(1, settings.downloadTimeoutMinutes) * 60;
-  const downloading = listJobsByStatus(["downloading"]);
-  if (downloading.length === 0) {
+  const openJobs = listJobsByStatus(["downloading", "waiting_file"]);
+  if (openJobs.length === 0) {
     const failed = failStaleDownloadingJobs(staleSeconds);
     return { checked: 0, failed };
   }
@@ -404,8 +504,9 @@ export async function reconcileDownloadingJobs() {
     const undone = undoneResult.tasks;
     const done = doneResult.tasks;
     const transferring = transferringResult.tasks;
+    const allTasks = [...undone, ...done, ...transferring];
     const byId = new Map<string, OpenListTask>();
-    for (const task of [...undone, ...done, ...transferring]) {
+    for (const task of allTasks) {
       if (task.id) byId.set(String(task.id), task);
     }
 
@@ -431,30 +532,109 @@ export async function reconcileDownloadingJobs() {
       );
     }
 
-    for (const job of downloading) {
-      if (!job.openlistTaskId) continue;
-      const taskId = String(job.openlistTaskId);
+    const listsUsable = undoneResult.available || doneResult.available;
+
+    for (const job of openJobs) {
+      let taskId = job.openlistTaskId ? String(job.openlistTaskId) : null;
+
+      // Primary identity: rebind offline task by magnet/hash when submit only returned 10008.
+      if (!taskId && listsUsable && (job.sourceUrl || job.infoHash)) {
+        const rebound = await rebindOfflineTaskId(job, allTasks);
+        if (rebound) {
+          taskId = rebound.taskId;
+          // Rebind after duplicate → wait for file, not "actively downloading".
+          if (job.status !== "waiting_file") {
+            updateJobStatus(job.id, "waiting_file", {
+              openlistTaskId: rebound.taskId,
+              infoHash: rebound.infoHash,
+              offlineName: rebound.offlineName,
+              errorMessage: `Bound existing OpenList offline task ${rebound.taskId}; waiting for file in download directory`
+            });
+          }
+          touchDownloadingJobActivity(job.id);
+          protectedFromTimeout.add(job.id);
+          continue;
+        }
+      }
+
+      if (!taskId) {
+        // No task handle — if we believe URL is already offline, stay in waiting_file.
+        if (
+          job.errorMessage &&
+          isAlreadyInOfflineListErrorMessage(job.errorMessage)
+        ) {
+          if (job.status !== "waiting_file") {
+            updateJobStatus(job.id, "waiting_file", {
+              errorMessage: job.errorMessage
+            });
+          }
+          protectedFromTimeout.add(job.id);
+        }
+        continue;
+      }
+
       const task = byId.get(taskId);
       if (task && isOfflineTaskFailed(task)) {
+        // Duplicate/already-exists noise on the task row is not a real failure.
+        if (task.error && isAlreadyInOfflineListErrorMessage(task.error)) {
+          if (job.status !== "waiting_file") {
+            updateJobStatus(job.id, "waiting_file", {
+              openlistTaskId: taskId,
+              offlineName: task.name?.trim() || job.offlineName,
+              errorMessage: `Bound existing OpenList offline task ${taskId}; waiting for file in download directory`
+            });
+          }
+          touchDownloadingJobActivity(job.id);
+          protectedFromTimeout.add(job.id);
+          continue;
+        }
         updateJobStatus(job.id, "failed", {
           clearOpenlistTaskId: true,
-          errorMessage: task.error?.trim() || `OpenList offline task failed (${task.status || task.state})`
+          errorMessage:
+            task.error?.trim() ||
+            `OpenList offline task failed (${task.status || task.state})`
         });
         failed += 1;
         continue;
       }
       if (activeIds.has(taskId)) {
-        // Keep the timeout clock tied to the last confirmed OpenList activity.
+        // Still pulling / transferring.
+        if (job.status !== "downloading") {
+          updateJobStatus(job.id, "downloading", {
+            openlistTaskId: taskId,
+            offlineName: task?.name?.trim() || job.offlineName,
+            errorMessage: null
+          });
+        }
         touchDownloadingJobActivity(job.id);
         continue;
       }
-      if (!activeTaskListsAvailable) {
-        // A network/endpoint error is not evidence that the remote task vanished.
+      if (task && isOfflineTaskSucceeded(task)) {
+        // Finished on OpenList — wait for scan to adopt the media file.
+        if (job.status !== "waiting_file") {
+          updateJobStatus(job.id, "waiting_file", {
+            openlistTaskId: taskId,
+            offlineName: task.name?.trim() || job.offlineName,
+            errorMessage: `OpenList offline task succeeded; waiting for file in download directory`
+          });
+        }
+        touchDownloadingJobActivity(job.id);
         protectedFromTimeout.add(job.id);
         continue;
       }
-      // Task not in active lists: either succeeded and was purged (115), or vanished.
-      // Do not mark completed here; wait for file scan or stale timeout.
+      if (!activeTaskListsAvailable) {
+        protectedFromTimeout.add(job.id);
+        continue;
+      }
+      // Task not in active lists: often succeeded and purged — wait for file.
+      if (job.status !== "waiting_file") {
+        updateJobStatus(job.id, "waiting_file", {
+          openlistTaskId: taskId,
+          errorMessage:
+            "OpenList offline task left active queue; waiting for file in download directory"
+        });
+      }
+      protectedFromTimeout.add(job.id);
     }
   }
 
@@ -463,19 +643,54 @@ export async function reconcileDownloadingJobs() {
     undefined,
     [...protectedFromTimeout]
   );
-  return { checked: downloading.length, failed };
+  if (rebindStats.attempted > 0) {
+    console.log(
+      `[pipeline] offline rebind stats attempted=${rebindStats.attempted} hit=${rebindStats.hit} miss=${rebindStats.miss} conflict=${rebindStats.conflict}`
+    );
+  }
+  return { checked: openJobs.length, failed };
 }
 
-/** Re-submit offline download (clears OpenList task id). */
+/**
+ * Re-submit offline download (clears OpenList task id).
+ * - Fresh 10008 / Bound waiting_file → prefer reorganize (scan) first.
+ * - needs_review after scan misses, or stuck waiting without progress → force submit.
+ */
 export async function retryJob(jobId: number) {
   const job = getJob(jobId);
   if (!job) throw new Error(`Job ${jobId} not found`);
-  console.log(`[pipeline] redownload job#${job.id}`);
+
+  const duplicateLike =
+    job.errorMessage && isAlreadyInOfflineListErrorMessage(job.errorMessage);
+  const forceSubmit =
+    job.status === "needs_review" ||
+    (job.errorMessage?.toLowerCase().includes("media not found after") ??
+      false) ||
+    (job.status === "waiting_file" && (job.scanMissCount ?? 0) >= 3);
+
+  if (duplicateLike && !forceSubmit) {
+    console.log(
+      `[pipeline] redownload job#${job.id} → reorganize (duplicate offline; use needs_review/force path to resubmit)`
+    );
+    await reorganizeJob(jobId);
+    return;
+  }
+
+  console.log(
+    `[pipeline] redownload job#${job.id}${forceSubmit ? " (force submit)" : ""}`
+  );
   updateJobStatus(job.id, "queued", {
     errorMessage: null,
-    clearOpenlistTaskId: true
+    clearOpenlistTaskId: true,
+    scanMissCount: 0
   });
-  await submitJob({ ...job, status: "queued", openlistTaskId: null });
+  await submitJob({
+    ...job,
+    status: "queued",
+    openlistTaskId: null,
+    errorMessage: null,
+    scanMissCount: 0
+  });
 }
 
 /**
@@ -566,36 +781,54 @@ export async function submitJob(job: DownloadJob) {
 
   try {
     const offlineUrl = await resolveOfflineDownloadUrl(job.sourceUrl);
+    const infoHash = extractBtih(offlineUrl);
+    const offlineName = extractMagnetDisplayName(offlineUrl);
     await ensureOpenListDirectory(targetPath);
     const tasks = await add115OfflineDownload({
       urls: [offlineUrl],
       path: targetPath
     });
-    const taskId = tasks[0]?.id ? String(tasks[0].id) : null;
-    markJobAttempt(job.id, {
-      status: "downloading",
-      openlistTaskId: taskId,
-      targetPath,
-      errorMessage: taskId
-        ? null
-        : "OpenList returned no offline task id; waiting for file or timeout"
-    }, { incrementAttempt: !claimedAttempt });
+    const task = tasks[0];
+    const taskId = task?.id ? String(task.id) : null;
+    const taskError = task?.error?.trim() || "";
+    // Some OpenList builds return a task row that is already failed with 10008.
+    if (taskError && isAlreadyInOfflineListErrorMessage(taskError)) {
+      await markAlreadyInOfflineList(job.id, targetPath, claimedAttempt, {
+        sourceUrl: job.sourceUrl,
+        infoHash: infoHash ?? job.infoHash,
+        offlineName: offlineName ?? job.offlineName
+      });
+      return;
+    }
+    const boundTaskId = taskId
+      ? claimOpenlistTaskId(job.id, taskId)
+      : null;
+    markJobAttempt(
+      job.id,
+      {
+        status: "downloading",
+        openlistTaskId: boundTaskId,
+        infoHash: infoHash ?? job.infoHash,
+        offlineName: task?.name?.trim() || offlineName || job.offlineName,
+        targetPath,
+        errorMessage: boundTaskId
+          ? null
+          : "OpenList returned no offline task id; waiting for file or timeout"
+      },
+      { incrementAttempt: !claimedAttempt }
+    );
     console.log(
-      `[pipeline] job#${job.id} submitted offline task=${taskId ?? "n/a"}`
+      `[pipeline] job#${job.id} submitted offline task=${boundTaskId ?? "n/a"} hash=${infoHash ?? "?"}`
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // 115/OpenList often reject duplicate offline URLs — treat as "already downloading".
     if (isAlreadyInOfflineListError(message)) {
-      markJobAttempt(job.id, {
-        status: "downloading",
-        targetPath,
-        errorMessage:
-          "URL already in OpenList offline list; waiting for file in download directory"
-      }, { incrementAttempt: !claimedAttempt });
-      console.log(
-        `[pipeline] job#${job.id} already in offline list — waiting for file`
-      );
+      await markAlreadyInOfflineList(job.id, targetPath, claimedAttempt, {
+        sourceUrl: job.sourceUrl,
+        infoHash: job.infoHash,
+        offlineName: job.offlineName
+      });
       return;
     }
     markJobAttempt(job.id, {
@@ -605,6 +838,221 @@ export async function submitJob(job: DownloadJob) {
     }, { incrementAttempt: !claimedAttempt });
     console.error(`[pipeline] job#${job.id} submit failed: ${message}`);
   }
+}
+
+async function markAlreadyInOfflineList(
+  jobId: number,
+  targetPath: string,
+  claimedAttempt: boolean,
+  identity?: {
+    sourceUrl?: string | null;
+    infoHash?: string | null;
+    offlineName?: string | null;
+  }
+) {
+  const job = getJob(jobId);
+  const sourceUrl = identity?.sourceUrl ?? job?.sourceUrl ?? null;
+  let infoHash = identity?.infoHash ?? job?.infoHash ?? null;
+  let offlineName = identity?.offlineName ?? job?.offlineName ?? null;
+  let taskId: string | null = job?.openlistTaskId ?? null;
+  let boundLabel = "no task id";
+
+  if (sourceUrl && !infoHash) {
+    try {
+      const resolved = await resolveOfflineDownloadUrl(sourceUrl);
+      infoHash = extractBtih(resolved) ?? infoHash;
+      offlineName = extractMagnetDisplayName(resolved) ?? offlineName;
+    } catch {
+      // keep whatever we have
+    }
+  }
+
+  try {
+    const tasks = await listOfflineTasksForBinding();
+    const rebound = await rebindOfflineTaskId(
+      {
+        id: jobId,
+        sourceUrl,
+        infoHash,
+        offlineName,
+        openlistTaskId: taskId
+      },
+      tasks,
+      { persist: false }
+    );
+    if (rebound) {
+      taskId = rebound.taskId;
+      offlineName = rebound.offlineName ?? offlineName;
+      infoHash = rebound.infoHash ?? infoHash;
+      boundLabel = `task=${rebound.taskId}`;
+    }
+  } catch (error) {
+    console.warn(
+      `[pipeline] job#${jobId} offline task rebind failed: ${errorMessage(error)}`
+    );
+  }
+
+  markJobAttempt(
+    jobId,
+    {
+      status: "waiting_file",
+      openlistTaskId: taskId,
+      infoHash,
+      offlineName,
+      targetPath,
+      scanMissCount: 0,
+      errorMessage: taskId
+        ? `Bound existing OpenList offline task ${taskId}; waiting for file in download directory`
+        : "URL already in OpenList offline list; waiting for file in download directory"
+    },
+    { incrementAttempt: !claimedAttempt }
+  );
+  console.log(
+    `[pipeline] job#${jobId} already in offline list (${boundLabel}) — scanning incoming`
+  );
+  // File may already be complete under _incoming from the earlier OpenList task.
+  try {
+    await scanAndRenameIncoming();
+  } catch (error) {
+    console.error(
+      `[pipeline] job#${jobId} post-duplicate scan failed: ${errorMessage(error)}`
+    );
+  }
+}
+
+async function listOfflineTasksForBinding(): Promise<OpenListTask[]> {
+  const [undone, done] = await Promise.all([
+    listOfflineDownloadUndone(),
+    listOfflineDownloadDone()
+  ]);
+  return [...undone.tasks, ...done.tasks];
+}
+
+type OfflineRebindResult = {
+  taskId: string;
+  offlineName: string | null;
+  infoHash: string | null;
+};
+
+/**
+ * Match job.sourceUrl / infoHash to an OpenList offline task and optionally
+ * persist openlistTaskId so later reconcile/scan track by ID.
+ */
+async function rebindOfflineTaskId(
+  job: {
+    id: number;
+    sourceUrl?: string | null;
+    infoHash?: string | null;
+    offlineName?: string | null;
+    openlistTaskId?: string | null;
+  },
+  tasks: OpenListTask[],
+  options: { persist?: boolean } = {}
+): Promise<OfflineRebindResult | null> {
+  if (job.openlistTaskId) {
+    return {
+      taskId: String(job.openlistTaskId),
+      offlineName: job.offlineName ?? null,
+      infoHash: job.infoHash ?? null
+    };
+  }
+  if (tasks.length === 0) {
+    rebindStats.attempted += 1;
+    rebindStats.miss += 1;
+    return null;
+  }
+
+  rebindStats.attempted += 1;
+
+  let infoHash = job.infoHash?.trim().toLowerCase() || null;
+  let offlineName = job.offlineName ?? null;
+  const candidates: string[] = [];
+  if (job.sourceUrl?.trim()) candidates.push(job.sourceUrl.trim());
+
+  // Prefer stored hash — avoid re-downloading the .torrent on every rebind.
+  if (!infoHash && job.sourceUrl?.trim()) {
+    try {
+      const resolved = await resolveOfflineDownloadUrl(job.sourceUrl.trim());
+      if (resolved && resolved !== job.sourceUrl) candidates.push(resolved);
+      infoHash = extractBtih(resolved) ?? infoHash;
+      offlineName = extractMagnetDisplayName(resolved) ?? offlineName;
+    } catch {
+      // Keep raw URL matching if torrent→magnet conversion fails.
+    }
+  }
+
+  let found: OpenListTask | null = null;
+  for (const candidate of candidates.length > 0 ? candidates : [""]) {
+    found = findOfflineTaskForSource(tasks, candidate, {
+      infoHash,
+      offlineName
+    });
+    if (found?.id) break;
+  }
+  // Hash-only lookup when source URL is missing or failed to resolve.
+  if (!found?.id && infoHash) {
+    found = findOfflineTaskForSource(tasks, `magnet:?xt=urn:btih:${infoHash}`, {
+      infoHash,
+      offlineName
+    });
+  }
+  if (!found?.id) {
+    rebindStats.miss += 1;
+    return null;
+  }
+
+  const taskId = String(found.id);
+  const name = found.name?.trim() || offlineName || null;
+
+  if (options.persist !== false) {
+    // Atomic claim: refuse if another in-flight job already holds this task.
+    const claimed = tryClaimOpenlistTaskIdForJob(job.id, taskId, {
+      status: "waiting_file",
+      infoHash,
+      offlineName: name,
+      scanMissCount: 0,
+      errorMessage: `Bound existing OpenList offline task ${taskId}; waiting for file in download directory`
+    });
+    if (!claimed) {
+      rebindStats.conflict += 1;
+      console.warn(
+        `[pipeline] job#${job.id} skip task=${taskId}; claim lost or already bound`
+      );
+      return null;
+    }
+    rebindStats.hit += 1;
+    console.log(
+      `[pipeline] job#${job.id} rebound openlist task=${taskId} name=${name || "?"} hash=${infoHash || "?"}`
+    );
+  } else {
+    // Non-persist path still must not return a task another job already owns.
+    if (!tryClaimOpenlistTaskIdForJob(job.id, taskId, { infoHash, offlineName: name })) {
+      // Already ours with same id is ok — tryClaim allows openlist_task_id = taskId
+      const current = getJob(job.id);
+      if (current?.openlistTaskId !== taskId) {
+        rebindStats.conflict += 1;
+        return null;
+      }
+    }
+    rebindStats.hit += 1;
+  }
+  return { taskId, offlineName: name, infoHash };
+}
+
+/**
+ * Bind task id on successful submit (status stays downloading).
+ */
+function claimOpenlistTaskId(jobId: number, taskId: string): string | null {
+  const claimed = tryClaimOpenlistTaskIdForJob(jobId, taskId);
+  if (!claimed) {
+    const current = getJob(jobId);
+    if (current?.openlistTaskId === taskId) return taskId;
+    console.warn(
+      `[pipeline] job#${jobId} skip task=${taskId}; already bound to another job`
+    );
+    return null;
+  }
+  return taskId;
 }
 
 function isAlreadyInOfflineListError(message: string) {
@@ -718,6 +1166,12 @@ export async function scanAndRenameIncoming() {
       ...subscriptionPaths
     ]);
     const seen = new Set<string>();
+    // Prefer OpenList offline task names / magnet dn= over pure RSS title heuristics.
+    const taskNameHints = await buildOfflineTaskNameHints(subscriptions);
+    const waitingBefore = new Set(
+      listJobsByStatus(["waiting_file"]).map((job) => job.id)
+    );
+    const adoptedJobIds = new Set<number>();
 
     for (const incomingPath of incomingPaths) {
       assertIncomingMutationLease(leaseOwner);
@@ -726,13 +1180,62 @@ export async function scanAndRenameIncoming() {
       for (const file of files) {
         if (seen.has(file.path)) continue;
         seen.add(file.path);
-        await renameIncomingFile(file, subscriptions);
+        await renameIncomingFile(
+          file,
+          subscriptions,
+          taskNameHints,
+          adoptedJobIds
+        );
         assertIncomingMutationLease(leaseOwner);
       }
       await cleanupEmptyIncomingDirectories(incomingPath);
     }
+
+    escalateWaitingFileScanMisses(waitingBefore, adoptedJobIds);
   } finally {
     releaseWorkerLease(INCOMING_MUTATION_LEASE, leaseOwner);
+  }
+}
+
+/**
+ * After a full incoming scan: only count misses for waiting_file jobs that have a
+ * bound OpenList task id (file should appear). No task id / unbound 10008 → rely
+ * on time-based failStale only, never scan-count into needs_review.
+ */
+function escalateWaitingFileScanMisses(
+  waitingBefore: Set<number>,
+  adoptedJobIds: Set<number>
+) {
+  let escalated = 0;
+  for (const jobId of waitingBefore) {
+    if (adoptedJobIds.has(jobId)) continue;
+    const job = getJob(jobId);
+    if (!job || job.status !== "waiting_file") continue;
+
+    // Unbound waiting_file (no task handle): do not count scan misses.
+    if (!job.openlistTaskId?.trim()) continue;
+
+    const misses = (job.scanMissCount ?? 0) + 1;
+    if (misses >= WAITING_FILE_MAX_SCAN_MISSES) {
+      const reason = `Offline task bound but media not found after ${misses} scans (task=${job.openlistTaskId})`;
+      updateJobStatus(jobId, "needs_review", {
+        scanMissCount: misses,
+        errorMessage: reason
+      });
+      escalated += 1;
+      console.log(`[pipeline] job#${jobId} waiting_file → needs_review: ${reason}`);
+    } else {
+      markJobAttempt(
+        jobId,
+        { scanMissCount: misses },
+        { incrementAttempt: false }
+      );
+    }
+  }
+  if (escalated > 0) {
+    console.log(
+      `[pipeline] escalated ${escalated} waiting_file job(s) to needs_review after scan misses`
+    );
   }
 }
 
@@ -872,12 +1375,20 @@ async function findOpenListFile(path: string) {
 
 async function renameIncomingFile(
   file: OpenListFileEntry,
-  subscriptions: Subscription[]
+  subscriptions: Subscription[],
+  taskNameHints: Map<number, string> = new Map(),
+  adoptedJobIds?: Set<number>
 ) {
   const parsed = parseReleaseTitle(file.name);
   if (parsed.episodeNumber == null) return;
 
-  const match = findIncomingMatch(subscriptions, file.path, file.name, parsed);
+  const match = findIncomingMatch(
+    subscriptions,
+    file.path,
+    file.name,
+    parsed,
+    taskNameHints
+  );
   if (!match) return;
 
   const extension = getExtension(file.name);
@@ -987,9 +1498,11 @@ async function renameIncomingFile(
 
   try {
     if (job) {
+      adoptedJobIds?.add(job.id);
       updateJobStatus(job.id, "ready_to_rename", {
         targetPath: file.path,
-        errorMessage: null
+        errorMessage: null,
+        scanMissCount: 0
       });
       // Persist the intended destination before mutating OpenList. This makes a
       // completed remote move recoverable after a worker restart.
@@ -1086,7 +1599,12 @@ function matchesDeletedSubscription(
 }
 
 async function cleanupEmptyIncomingDirectories(root: string) {
-  const hasActiveJob = listJobsByStatus(["queued", "downloading", "ready_to_rename"])
+  const hasActiveJob = listJobsByStatus([
+    "queued",
+    "downloading",
+    "waiting_file",
+    "ready_to_rename"
+  ])
     .some((job) => job.targetPath && isRemotePathWithin(job.targetPath, root));
   if (hasActiveJob) return;
 
@@ -1178,13 +1696,118 @@ async function listLibraryMediaFiles(
   return files;
 }
 
+/**
+ * Map jobId → OpenList offline task name (or magnet dn=) for path-based adopt.
+ * Prefer stored offlineName / infoHash so scan does not re-fetch every torrent.
+ */
+async function buildOfflineTaskNameHints(
+  _subscriptions: Subscription[]
+): Promise<Map<number, string>> {
+  const hints = new Map<number, string>();
+  const jobs = listJobsByStatus([
+    "downloading",
+    "waiting_file",
+    "ready_to_rename",
+    "failed"
+  ]);
+  if (jobs.length === 0) return hints;
+
+  let tasks: OpenListTask[] = [];
+  let needLiveTasks = false;
+  for (const job of jobs) {
+    if (job.offlineName?.trim()) {
+      hints.set(job.id, job.offlineName.trim());
+      continue;
+    }
+    if (job.openlistTaskId || job.sourceUrl || job.infoHash) {
+      needLiveTasks = true;
+    }
+  }
+
+  if (!needLiveTasks) return hints;
+
+  try {
+    tasks = await listOfflineTasksForBinding();
+  } catch {
+    tasks = [];
+  }
+  const byId = new Map(
+    tasks.filter((task) => task.id).map((task) => [String(task.id), task])
+  );
+
+  for (const job of jobs) {
+    if (hints.has(job.id)) continue;
+
+    if (job.openlistTaskId) {
+      const task = byId.get(String(job.openlistTaskId));
+      if (task?.name?.trim()) {
+        hints.set(job.id, task.name.trim());
+        continue;
+      }
+    }
+
+    if (tasks.length > 0 && (job.sourceUrl || job.infoHash)) {
+      const found = findOfflineTaskForSource(tasks, job.sourceUrl ?? "", {
+        infoHash: job.infoHash,
+        offlineName: job.offlineName
+      });
+      if (found?.name?.trim()) {
+        hints.set(job.id, found.name.trim());
+        continue;
+      }
+    }
+
+    const dn = extractMagnetDisplayName(job.sourceUrl);
+    if (dn) hints.set(job.id, dn);
+  }
+
+  return hints;
+}
+
+/** Boost when remote path looks like the OpenList offline task / torrent name. */
+function offlineTaskPathBoost(
+  pathLower: string,
+  filenameLower: string,
+  taskHint: string
+): number {
+  const hint = taskHint.trim().toLowerCase();
+  if (hint.length < 4) return 0;
+
+  if (pathLower.includes(hint) || filenameLower.includes(hint)) {
+    return 120;
+  }
+
+  // Compare significant path segment tokens (torrent folders often shorten names).
+  const hintTokens = hint
+    .split(/[^a-z0-9\u4e00-\u9fff]+/i)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 4)
+    .slice(0, 8);
+  if (hintTokens.length === 0) return 0;
+
+  let hits = 0;
+  for (const token of hintTokens) {
+    if (pathLower.includes(token) || filenameLower.includes(token)) hits += 1;
+  }
+  if (hits === 0) return 0;
+  if (hits >= Math.min(3, hintTokens.length)) return 90;
+  if (hits >= 2) return 60;
+  return 30;
+}
+
 function findIncomingMatch(
   subscriptions: Subscription[],
   filePath: string,
   filename: string,
-  parsed: ReturnType<typeof parseReleaseTitle>
+  parsed: ReturnType<typeof parseReleaseTitle>,
+  taskNameHints: Map<number, string> = new Map()
 ) {
-  const tracked = findTrackedJobMatch(subscriptions, filePath, parsed);
+  const tracked = findTrackedJobMatch(
+    subscriptions,
+    filePath,
+    parsed,
+    taskNameHints
+  );
   if (tracked) return tracked;
 
   const subscription = findSubscriptionByFilenameRules(
@@ -1201,7 +1824,8 @@ function findIncomingMatch(
 function findTrackedJobMatch(
   subscriptions: Subscription[],
   filePath: string,
-  parsed: ReturnType<typeof parseReleaseTitle>
+  parsed: ReturnType<typeof parseReleaseTitle>,
+  taskNameHints: Map<number, string> = new Map()
 ) {
   if (parsed.episodeNumber == null) return null;
 
@@ -1209,6 +1833,7 @@ function findTrackedJobMatch(
     subscriptions.map((subscription) => [subscription.id, subscription])
   );
   const filename = getRemoteBaseName(filePath);
+  const pathLower = filePath.toLowerCase();
 
   const candidates: Array<{
     subscription: Subscription;
@@ -1217,7 +1842,12 @@ function findTrackedJobMatch(
     score: number;
   }> = [];
 
-  for (const job of listJobsByStatus(["downloading", "ready_to_rename", "failed"])) {
+  for (const job of listJobsByStatus([
+    "downloading",
+    "waiting_file",
+    "ready_to_rename",
+    "failed"
+  ])) {
     const subscription = subscriptionById.get(job.subscriptionId);
     if (!subscription) continue;
     const pendingFile = getEpisodeFileForFeedItem(job.feedItemId);
@@ -1249,14 +1879,34 @@ function findTrackedJobMatch(
     const decision = evaluateRules(feedItem.title, metadata, listRules(subscription.id));
     if (!decision.allowed) continue;
 
-    const score =
-      scoreTrackedJobIdentity({
-        subscriptionName: subscription.name,
-        feedTitle: feedItem.title,
-        metadata,
-        filename,
-        parsed
-      }) + (isExpectedRenamedSource ? MIN_TRACKED_JOB_MATCH_SCORE : 0);
+    const baseScore = scoreTrackedJobIdentity({
+      subscriptionName: subscription.name,
+      feedTitle: feedItem.title,
+      metadata,
+      filename,
+      parsed
+    });
+    // Strongest signal after task-id rebind: OpenList offline task name / magnet dn
+    // appears in the remote path (usually the torrent folder name).
+    const taskHint = taskNameHints.get(job.id);
+    const pathBoost = taskHint
+      ? offlineTaskPathBoost(pathLower, filename.toLowerCase(), taskHint)
+      : 0;
+
+    // Group-mismatch hard-reject (baseScore 0) may still be rescued by strong
+    // task-name path evidence — never by resolution/revision alone.
+    if (
+      baseScore === 0 &&
+      pathBoost < MIN_PATH_EVIDENCE_FOR_GROUP_MISMATCH
+    ) {
+      continue;
+    }
+
+    let score =
+      baseScore +
+      pathBoost +
+      (isExpectedRenamedSource ? MIN_TRACKED_JOB_MATCH_SCORE : 0);
+
     if (score < MIN_TRACKED_JOB_MATCH_SCORE) continue;
 
     candidates.push({ subscription, job, metadata, score });
@@ -1354,7 +2004,13 @@ function findCompletableJob(
 ) {
   // Prefer exact revision, then highest revision with an in-flight job.
   // Filename often lacks "v2" even when the RSS metadata had it.
-  const inFlight = new Set(["discovered", "queued", "downloading", "ready_to_rename"]);
+  const inFlight = new Set([
+    "discovered",
+    "queued",
+    "downloading",
+    "waiting_file",
+    "ready_to_rename"
+  ]);
   const metadata = findMetadataBySubscription(subscription.id)
     .filter((item) => item.episodeNumber === episodeNumber)
     .map((item) => {
@@ -1400,9 +2056,14 @@ function markSupersededJob(feedItemId: number) {
   // is not raced by the superseded job completing.
   if (
     !job ||
-    !["discovered", "queued", "needs_review", "downloading", "ready_to_rename"].includes(
-      job.status
-    )
+    ![
+      "discovered",
+      "queued",
+      "needs_review",
+      "downloading",
+      "waiting_file",
+      "ready_to_rename"
+    ].includes(job.status)
   ) {
     return;
   }

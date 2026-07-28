@@ -58,6 +58,13 @@ describe("OpenList client", () => {
     );
     expect(isAlreadyInOfflineListErrorMessage("task url already exists")).toBe(true);
     expect(isAlreadyInOfflineListErrorMessage("离线任务已存在")).toBe(true);
+    expect(
+      isAlreadyInOfflineListErrorMessage(
+        "failed to add offline download task: code: 10008, message: 任务已存在，请勿输入重复的链接地址"
+      )
+    ).toBe(true);
+    expect(isAlreadyInOfflineListErrorMessage("任务已存在")).toBe(true);
+    expect(isAlreadyInOfflineListErrorMessage("code: 10008")).toBe(true);
   });
 
   it("submits RSS URLs through OpenList 115 offline download", async () => {

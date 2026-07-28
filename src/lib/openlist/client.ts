@@ -497,17 +497,24 @@ export function isAlreadyExistsErrorMessage(message: string) {
 /**
  * True only for "URL already in offline list" style errors.
  * Must not match "does not exist" (bare "exist" / "already" are unsafe).
+ *
+ * OpenList / 115 common forms:
+ * - code 10008 + "任务已存在，请勿输入重复的链接地址"
+ * - "URL already in the offline list"
  */
 export function isAlreadyInOfflineListErrorMessage(message: string) {
   if (/does\s+not\s+exist|not\s+found|找不到|不存在/i.test(message)) {
     return false;
   }
   return (
+    /code\s*[:：]?\s*10008\b/i.test(message) ||
     /already\s+in\s+(the\s+)?offline/i.test(message) ||
     /in\s+the\s+offline\s+list/i.test(message) ||
-    /duplicate\s+(url|task|download)/i.test(message) ||
+    /duplicate\s+(url|task|download|link)/i.test(message) ||
     /task\s+url\s+already/i.test(message) ||
     /url\s+already\s+(exist|in)/i.test(message) ||
+    /重复的链接/i.test(message) ||
+    /任务已存在/i.test(message) ||
     /离线.*(已存在|重复|已在)/i.test(message) ||
     /(已存在|重复).*离线/i.test(message) ||
     /任务.*重复|重复.*任务/i.test(message)

@@ -46,6 +46,43 @@ export function torrentBufferToMagnet(buffer: Buffer) {
   return `magnet:?${params.join("&")}`;
 }
 
+/** Hex info-hash from a magnet URI or any string containing urn:btih / bare 40-hex. */
+export function extractBtih(value: string | null | undefined): string | null {
+  if (!value?.trim()) return null;
+  const text = value.trim();
+
+  const urn = text.match(/urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})\b/i);
+  if (urn?.[1]) return normalizeBtih(urn[1]);
+
+  const bareHex = text.match(/\b([a-fA-F0-9]{40})\b/);
+  if (bareHex?.[1]) return bareHex[1].toLowerCase();
+
+  return null;
+}
+
+/** Display name from magnet `dn=` parameter, if present. */
+export function extractMagnetDisplayName(
+  value: string | null | undefined
+): string | null {
+  if (!value?.trim()) return null;
+  const match = value.match(/[?&]dn=([^&]+)/i);
+  if (!match?.[1]) return null;
+  try {
+    const decoded = decodeURIComponent(match[1].replace(/\+/g, " ")).trim();
+    return decoded || null;
+  } catch {
+    return match[1].trim() || null;
+  }
+}
+
+function normalizeBtih(value: string) {
+  const raw = value.trim();
+  if (/^[a-fA-F0-9]{40}$/.test(raw)) return raw.toLowerCase();
+  // Base32 info-hashes (v1 magnets) — keep lowercased form for substring match.
+  if (/^[a-zA-Z2-7]{32}$/.test(raw)) return raw.toLowerCase();
+  return raw.toLowerCase();
+}
+
 function looksLikeTorrentUrl(url: string) {
   return /\.torrent(?:[?#]|$)/i.test(url) || /mikanani\.me\/Download\//i.test(url);
 }

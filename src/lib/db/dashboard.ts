@@ -190,9 +190,12 @@ function preferredEpisodeSql() {
         j.id AS job_id,
         j.status AS job_status,
         j.openlist_task_id,
+        j.info_hash,
+        j.offline_name,
         j.source_url,
         j.target_path,
         j.error_message,
+        j.scan_miss_count,
         j.attempts,
         j.created_at AS job_created_at,
         j.updated_at AS job_updated_at,
@@ -268,9 +271,12 @@ function preferredEpisodeSql() {
         NULL AS job_id,
         NULL AS job_status,
         NULL AS openlist_task_id,
+        NULL AS info_hash,
+        NULL AS offline_name,
         NULL AS source_url,
         NULL AS target_path,
         NULL AS error_message,
+        NULL AS scan_miss_count,
         NULL AS attempts,
         NULL AS job_created_at,
         NULL AS job_updated_at,
@@ -414,7 +420,7 @@ function statusSql(status: EpisodeStatusFilter) {
     return `job_status = 'needs_review'`;
   }
   // active
-  return `job_status IN ('queued', 'downloading', 'ready_to_rename')`;
+  return `job_status IN ('queued', 'downloading', 'waiting_file', 'ready_to_rename')`;
 }
 
 function mapDashboardRow(record: Record<string, unknown>): DashboardEpisodeRow {
@@ -463,9 +469,12 @@ function mapDashboardRow(record: Record<string, unknown>): DashboardEpisodeRow {
           feed_item_id: record.feed_id,
           status: record.job_status,
           openlist_task_id: record.openlist_task_id,
+          info_hash: record.info_hash,
+          offline_name: record.offline_name,
           source_url: record.source_url,
           target_path: record.target_path,
           error_message: record.error_message,
+          scan_miss_count: record.scan_miss_count,
           attempts: record.attempts,
           created_at: record.job_created_at,
           updated_at: record.job_updated_at

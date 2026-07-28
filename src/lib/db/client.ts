@@ -109,9 +109,12 @@ function bootstrapSchema(database: Database.Database) {
       feed_item_id INTEGER NOT NULL UNIQUE REFERENCES feed_items(id) ON DELETE CASCADE,
       status TEXT NOT NULL,
       openlist_task_id TEXT,
+      info_hash TEXT,
+      offline_name TEXT,
       source_url TEXT,
       target_path TEXT,
       error_message TEXT,
+      scan_miss_count INTEGER NOT NULL DEFAULT 0,
       attempts INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -160,6 +163,18 @@ function bootstrapSchema(database: Database.Database) {
   ensureColumn(database, "feed_items", "rss_guid", "TEXT");
   normalizeReleaseMetadataSchema(database);
   ensureColumn(database, "release_metadata", "release_revision", "INTEGER NOT NULL DEFAULT 1");
+  ensureColumn(database, "download_jobs", "info_hash", "TEXT");
+  ensureColumn(database, "download_jobs", "offline_name", "TEXT");
+  ensureColumn(
+    database,
+    "download_jobs",
+    "scan_miss_count",
+    "INTEGER NOT NULL DEFAULT 0"
+  );
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS idx_jobs_info_hash ON download_jobs(info_hash);
+    CREATE INDEX IF NOT EXISTS idx_jobs_openlist_task ON download_jobs(openlist_task_id);
+  `);
   backfillReleaseRevisions(database);
 }
 

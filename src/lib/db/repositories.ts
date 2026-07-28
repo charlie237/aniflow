@@ -926,6 +926,14 @@ export function markJobAttempt(
         fields.openlistTaskId !== undefined
           ? fields.openlistTaskId
           : sql`${downloadJobs.openlistTaskId}`,
+      infoHash:
+        fields.infoHash !== undefined
+          ? fields.infoHash
+          : sql`${downloadJobs.infoHash}`,
+      offlineName:
+        fields.offlineName !== undefined
+          ? fields.offlineName
+          : sql`${downloadJobs.offlineName}`,
       targetPath:
         fields.targetPath !== undefined && fields.targetPath !== null
           ? fields.targetPath
@@ -934,6 +942,10 @@ export function markJobAttempt(
         fields.errorMessage !== undefined
           ? fields.errorMessage
           : sql`${downloadJobs.errorMessage}`,
+      scanMissCount:
+        fields.scanMissCount !== undefined
+          ? fields.scanMissCount
+          : sql`${downloadJobs.scanMissCount}`,
       attempts:
         options.incrementAttempt === false
           ? sql`${downloadJobs.attempts}`
@@ -971,8 +983,11 @@ export function updateJobStatus(
   fields?: {
     openlistTaskId?: string | null;
     clearOpenlistTaskId?: boolean;
+    infoHash?: string | null;
+    offlineName?: string | null;
     targetPath?: string | null;
     errorMessage?: string | null;
+    scanMissCount?: number;
   }
 ) {
   getDb()
@@ -984,15 +999,124 @@ export function updateJobStatus(
         : fields?.openlistTaskId
           ? fields.openlistTaskId
           : sql`${downloadJobs.openlistTaskId}`,
+      infoHash:
+        fields?.infoHash !== undefined
+          ? fields.infoHash
+          : sql`${downloadJobs.infoHash}`,
+      offlineName:
+        fields?.offlineName !== undefined
+          ? fields.offlineName
+          : sql`${downloadJobs.offlineName}`,
       targetPath:
         fields?.targetPath !== undefined && fields?.targetPath !== null
           ? fields.targetPath
           : sql`${downloadJobs.targetPath}`,
       errorMessage: fields?.errorMessage ?? null,
+      scanMissCount:
+        fields?.scanMissCount !== undefined
+          ? fields.scanMissCount
+          : sql`${downloadJobs.scanMissCount}`,
       updatedAt: sql`CURRENT_TIMESTAMP`
     })
     .where(eq(downloadJobs.id, jobId))
     .run();
+}
+
+/** One-shot: old "Bound… waiting for file" rows stuck as downloading. */
+export function migrateBoundDownloadingToWaitingFile() {
+  return getSqlite()
+    .prepare(
+      `UPDATE download_jobs SET
+        status = 'waiting_file',
+        updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'downloading'
+         AND error_message IS NOT NULL
+         AND (
+           error_message LIKE '%Bound existing OpenList offline task%'
+           OR error_message LIKE '%already in OpenList offline list%'
+           OR error_message LIKE '%OpenList offline task succeeded%'
+           OR error_message LIKE '%left active queue; waiting for file%'
+         )`
+    )
+    .run().changes;
+}
+
+/** Another in-flight job already bound to this OpenList offline task. */
+export function findJobByOpenlistTaskId(
+  openlistTaskId: string,
+  excludeJobId?: number
+) {
+  const rows = getDb()
+    .select()
+    .from(downloadJobs)
+    .where(eq(downloadJobs.openlistTaskId, openlistTaskId))
+    .all()
+    .map((row) => mapJob(row as unknown as Record<string, unknown>));
+  return (
+    rows.find(
+      (job) =>
+        job.id !== excludeJobId &&
+        ["queued", "downloading", "waiting_file", "ready_to_rename"].includes(
+          job.status
+        )
+    ) ?? null
+  );
+}
+
+/**
+ * Atomically bind openlist_task_id to a job if no other in-flight job holds it.
+ * Uses a transaction + conditional update to close check-then-act races.
+ */
+export function tryClaimOpenlistTaskIdForJob(
+  jobId: number,
+  taskId: string,
+  fields?: {
+    status?: JobStatus;
+    infoHash?: string | null;
+    offlineName?: string | null;
+    errorMessage?: string | null;
+    scanMissCount?: number;
+  }
+): boolean {
+  const sqlite = getSqlite();
+  return sqlite.transaction(() => {
+    // Any non-terminal job already holding this task blocks the claim.
+    const owner = sqlite
+      .prepare(
+        `SELECT id FROM download_jobs
+         WHERE openlist_task_id = ?
+           AND id != ?
+           AND status NOT IN ('completed', 'skipped')
+         LIMIT 1`
+      )
+      .get(taskId, jobId) as { id: number } | undefined;
+    if (owner) return false;
+
+    const result = sqlite
+      .prepare(
+        `UPDATE download_jobs SET
+          openlist_task_id = ?,
+          status = COALESCE(?, status),
+          info_hash = COALESCE(?, info_hash),
+          offline_name = COALESCE(?, offline_name),
+          error_message = COALESCE(?, error_message),
+          scan_miss_count = COALESCE(?, scan_miss_count),
+          updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?
+           AND (openlist_task_id IS NULL OR openlist_task_id = ? OR openlist_task_id = '')`
+      )
+      .run(
+        taskId,
+        fields?.status ?? null,
+        fields?.infoHash ?? null,
+        fields?.offlineName ?? null,
+        fields?.errorMessage ?? null,
+        fields?.scanMissCount ?? null,
+        jobId,
+        taskId
+      );
+    return result.changes > 0;
+  })();
 }
 
 /**
@@ -1022,12 +1146,18 @@ export function touchDownloadingJobActivity(jobId: number) {
     getSqlite()
       .prepare(
         `UPDATE download_jobs SET updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND status = 'downloading'`
+         WHERE id = ? AND status IN ('downloading', 'waiting_file')`
       )
       .run(jobId).changes > 0
   );
 }
 
+/**
+ * Time out stuck download / file-wait / rename jobs.
+ * - downloading: OpenList still pulling
+ * - waiting_file: offline task bound/done, media not adopted yet (longer grace)
+ * - ready_to_rename: mid-organize
+ */
 export function failStaleDownloadingJobs(
   maxAgeSeconds?: number,
   errorMessage = "Download timed out waiting for OpenList / 115 completion",
@@ -1036,31 +1166,64 @@ export function failStaleDownloadingJobs(
   const ageSeconds =
     maxAgeSeconds ??
     Math.max(1, getSystemSettings().downloadTimeoutMinutes) * 60;
+  const waitFileSeconds = Math.max(ageSeconds, ageSeconds * 2);
   const excludedIds = [...new Set(excludedJobIds.filter(Number.isInteger))];
   const exclusionSql = excludedIds.length
     ? ` AND id NOT IN (${excludedIds.map(() => "?").join(", ")})`
     : "";
-  // ready_to_rename can also get stuck (rename not-found previously left jobs there).
-  return getSqlite()
+
+  const sqlite = getSqlite();
+  let changes = 0;
+
+  changes += sqlite
     .prepare(
       `UPDATE download_jobs SET
         status = 'failed',
         openlist_task_id = NULL,
-        error_message = CASE
-          WHEN status = 'ready_to_rename' THEN ?
-          ELSE ?
-        END,
+        error_message = ?,
         updated_at = CURRENT_TIMESTAMP
-       WHERE status IN ('downloading', 'ready_to_rename')
+       WHERE status = 'downloading'
+         AND datetime(updated_at) < datetime('now', ?)
+         ${exclusionSql}`
+    )
+    .run(errorMessage, `-${Math.max(60, ageSeconds)} seconds`, ...excludedIds)
+    .changes;
+
+  changes += sqlite
+    .prepare(
+      `UPDATE download_jobs SET
+        status = 'failed',
+        openlist_task_id = NULL,
+        error_message = ?,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'waiting_file'
+         AND datetime(updated_at) < datetime('now', ?)
+         ${exclusionSql}`
+    )
+    .run(
+      "Timed out waiting for media file after offline task completed",
+      `-${Math.max(60, waitFileSeconds)} seconds`,
+      ...excludedIds
+    ).changes;
+
+  changes += sqlite
+    .prepare(
+      `UPDATE download_jobs SET
+        status = 'failed',
+        openlist_task_id = NULL,
+        error_message = ?,
+        updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'ready_to_rename'
          AND datetime(updated_at) < datetime('now', ?)
          ${exclusionSql}`
     )
     .run(
       "Rename timed out waiting for OpenList file organization",
-      errorMessage,
       `-${Math.max(60, ageSeconds)} seconds`,
       ...excludedIds
     ).changes;
+
+  return changes;
 }
 
 export function requeueFailedDownloadJobs() {
@@ -1098,6 +1261,12 @@ export function requeueFailedDownloadJobs() {
              error_message NOT LIKE '%Job has no source URL%'
              AND error_message NOT LIKE '%Subscription no longer exists%'
              AND error_message NOT LIKE '%Superseded by a newer release%'
+             -- OpenList already has this URL; re-submit only produces 10008.
+             AND error_message NOT LIKE '%10008%'
+             AND error_message NOT LIKE '%任务已存在%'
+             AND error_message NOT LIKE '%重复的链接%'
+             AND error_message NOT LIKE '%already in OpenList offline%'
+             AND error_message NOT LIKE '%already in the offline list%'
            )
          )`
     )
@@ -1510,7 +1679,12 @@ function getDashboardStats(
     .select({ count: count() })
     .from(downloadJobs)
     .where(
-      inArray(downloadJobs.status, ["queued", "downloading", "ready_to_rename"])
+      inArray(downloadJobs.status, [
+        "queued",
+        "downloading",
+        "waiting_file",
+        "ready_to_rename"
+      ])
     )
     .get();
   const needsReviewJobs = getDb()

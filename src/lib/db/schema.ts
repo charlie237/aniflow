@@ -110,9 +110,17 @@ export const downloadJobs = sqliteTable(
       .references(() => feedItems.id, { onDelete: "cascade" }),
     status: text("status").notNull(),
     openlistTaskId: text("openlist_task_id"),
+    /** BitTorrent info-hash (hex), set when torrent/magnet is resolved. */
+    infoHash: text("info_hash"),
+    /**
+     * OpenList offline task name or magnet dn= — used to adopt incoming folders
+     * without re-querying the full task list every scan.
+     */
+    offlineName: text("offline_name"),
     sourceUrl: text("source_url"),
     targetPath: text("target_path"),
     errorMessage: text("error_message"),
+    scanMissCount: integer("scan_miss_count").notNull().default(0),
     attempts: integer("attempts").notNull().default(0),
     createdAt: text("created_at")
       .notNull()
@@ -121,7 +129,11 @@ export const downloadJobs = sqliteTable(
       .notNull()
       .default(sql`CURRENT_TIMESTAMP`)
   },
-  (table) => [index("idx_jobs_status").on(table.status, table.updatedAt)]
+  (table) => [
+    index("idx_jobs_status").on(table.status, table.updatedAt),
+    index("idx_jobs_info_hash").on(table.infoHash),
+    index("idx_jobs_openlist_task").on(table.openlistTaskId)
+  ]
 );
 
 export const episodeFiles = sqliteTable(

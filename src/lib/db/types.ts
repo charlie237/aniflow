@@ -3,6 +3,8 @@ export type JobStatus =
   | "skipped"
   | "queued"
   | "downloading"
+  /** Offline task bound / finished; waiting for media under _incoming. */
+  | "waiting_file"
   | "needs_review"
   | "ready_to_rename"
   | "completed"
@@ -93,9 +95,15 @@ export interface DownloadJob {
   feedItemId: number;
   status: JobStatus;
   openlistTaskId: string | null;
+  /** BitTorrent info-hash (hex), when known. */
+  infoHash: string | null;
+  /** OpenList offline task name or magnet display name. */
+  offlineName: string | null;
   sourceUrl: string | null;
   targetPath: string | null;
   errorMessage: string | null;
+  /** Consecutive incoming scans while status=waiting_file with no adopt. */
+  scanMissCount: number;
   attempts: number;
   createdAt: string;
   updatedAt: string;
