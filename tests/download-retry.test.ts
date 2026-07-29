@@ -501,10 +501,176 @@ describe("download fail-stop lifecycle", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     try {
-      const result = await pollAllSubscriptions();
-      expect(result.failed).toBe(1);
+      await expect(pollAllSubscriptions()).rejects.toThrow(
+        /Subscription poll failed: RSS fetch failed \(502\) for A Broken Feed/
+      );
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(getSubscription(healthy.id)?.lastPolledAt).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fails an active older revision instead of orphaning its remote task", async () => {
+    const sub = createSubscription({
+      name: "Revision Lifecycle",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=8301",
+      autoDownload: false,
+      seasonNumber: 1,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+
+    const v1 = upsertFeedItem(sub, {
+      guid: "revision-lifecycle-v1",
+      title: "[G] Revision Lifecycle - 01 [1080p][CHS].mkv",
+      downloadUrl: "https://mikanani.me/Download/revision-lifecycle-v1.torrent",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Revision Lifecycle",
+        episodeNumber: 1,
+        episodeText: "01",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 100,
+        needsReview: false
+      }
+    });
+    const oldJob = createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: v1.id,
+      status: "downloading",
+      sourceUrl: "https://mikanani.me/Download/revision-lifecycle-v1.torrent",
+      openlistTaskId: "remote-v1"
+    });
+    if (!oldJob) return;
+    const oldTargetPath = incomingPathForJob(oldJob.id);
+    getSqlite()
+      .prepare("UPDATE download_jobs SET target_path = ? WHERE id = ?")
+      .run(oldTargetPath, oldJob.id);
+
+    const xml = `<rss version="2.0"><channel>
+      <item>
+        <guid>revision-lifecycle-v1</guid>
+        <title>[G] Revision Lifecycle - 01 [1080p][CHS].mkv</title>
+        <enclosure url="https://mikanani.me/Download/revision-lifecycle-v1.torrent" type="application/x-bittorrent" />
+      </item>
+      <item>
+        <guid>revision-lifecycle-v2</guid>
+        <title>[G] Revision Lifecycle - 01v2 [1080p][CHS].mkv</title>
+        <enclosure url="https://mikanani.me/Download/revision-lifecycle-v2.torrent" type="application/x-bittorrent" />
+      </item>
+    </channel></rss>`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(xml, { status: 200 })));
+    try {
+      await pollSubscription(sub.id);
+
+      expect(getJob(oldJob.id)).toMatchObject({
+        status: "failed",
+        openlistTaskId: "remote-v1",
+        targetPath: oldTargetPath
+      });
+      expect(getJob(oldJob.id)?.errorMessage).toContain(
+        "remote work may still be active"
+      );
+      expect(getJob(oldJob.id)?.errorMessage).toContain("do not retry");
+
+      const v2Feed = getSqlite()
+        .prepare("SELECT id FROM feed_items WHERE guid = ?")
+        .get("revision-lifecycle-v2") as { id: number } | undefined;
+      expect(v2Feed).toBeTruthy();
+      expect(v2Feed ? getJobForFeedItem(v2Feed.id)?.status : null).toBe(
+        "discovered"
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not auto-complete active or failed jobs from the library index", async () => {
+    const sub = createSubscription({
+      name: "Library State Guard",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=8302",
+      seasonNumber: 1,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+
+    const statuses = [
+      { episode: 1, status: "downloading" as const, errorMessage: null },
+      { episode: 2, status: "failed" as const, errorMessage: "manual cleanup required" },
+      { episode: 3, status: "queued" as const, errorMessage: null }
+    ];
+    const jobs: NonNullable<ReturnType<typeof createOrUpdateJob>>[] = [];
+    for (const entry of statuses) {
+      const feed = upsertFeedItem(sub, {
+        guid: `library-state-${entry.episode}`,
+        title: `[G] Library State Guard - ${String(entry.episode).padStart(2, "0")} [1080p][CHS].mkv`,
+        downloadUrl: `https://mikanani.me/Download/library-state-${entry.episode}.torrent`,
+        metadata: {
+          releaseGroup: "G",
+          parsedTitle: "Library State Guard",
+          episodeNumber: entry.episode,
+          episodeText: String(entry.episode).padStart(2, "0"),
+          releaseRevision: 1,
+          resolution: "1080p",
+          subtitleLanguage: "CHS",
+          container: "mkv",
+          tags: [],
+          parseConfidence: 100,
+          needsReview: false
+        }
+      });
+      const job = createOrUpdateJob({
+        subscriptionId: sub.id,
+        feedItemId: feed.id,
+        status: entry.status,
+        sourceUrl: `https://mikanani.me/Download/library-state-${entry.episode}.torrent`,
+        errorMessage: entry.errorMessage
+      });
+      if (!job) throw new Error("Failed to seed library-state job");
+      jobs.push(job);
+      const finalPath = `/115/Anime/Library State Guard/Season 01/Library State Guard - S01E${String(entry.episode).padStart(2, "0")}.mkv`;
+      upsertEpisodeFile({
+        subscriptionId: sub.id,
+        feedItemId: feed.id,
+        episodeNumber: entry.episode,
+        originalPath: finalPath,
+        finalPath,
+        status: "renamed"
+      });
+    }
+    const activeTargetPath = incomingPathForJob(jobs[0].id);
+    getSqlite()
+      .prepare("UPDATE download_jobs SET target_path = ? WHERE id = ?")
+      .run(activeTargetPath, jobs[0].id);
+
+    const items = statuses
+      .map(
+        ({ episode }) => `<item>
+          <guid>library-state-${episode}</guid>
+          <title>[G] Library State Guard - ${String(episode).padStart(2, "0")} [1080p][CHS].mkv</title>
+          <enclosure url="https://mikanani.me/Download/library-state-${episode}.torrent" type="application/x-bittorrent" />
+        </item>`
+      )
+      .join("");
+    const xml = `<rss version="2.0"><channel>${items}</channel></rss>`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(xml, { status: 200 })));
+    try {
+      await pollSubscription(sub.id);
+
+      expect(getJob(jobs[0].id)?.status).toBe("downloading");
+      expect(getJob(jobs[1].id)).toMatchObject({
+        status: "failed",
+        errorMessage: "manual cleanup required"
+      });
+      expect(getJob(jobs[2].id)).toMatchObject({
+        status: "skipped",
+        errorMessage: "Library episode already exists; download was not submitted"
+      });
     } finally {
       vi.unstubAllGlobals();
     }

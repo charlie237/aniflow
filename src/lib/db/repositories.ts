@@ -1393,47 +1393,18 @@ export function failWorkerTask(
     .run();
 }
 
-export function requeueStaleWorkerTasks(maxRunningSeconds = 1800) {
+export function failStaleWorkerTasks(maxRunningSeconds = 1800) {
   return getSqlite()
     .prepare(
       `UPDATE worker_tasks SET
-        status = 'queued',
-        error_message = 'Previous run timed out',
-        finished_at = NULL,
+        status = 'failed',
+        error_message = 'Worker task timed out; trigger it again manually',
+        finished_at = CURRENT_TIMESTAMP,
         updated_at = CURRENT_TIMESTAMP
        WHERE status = 'running'
          AND datetime(updated_at) < datetime('now', ?)`
     )
     .run(`-${maxRunningSeconds} seconds`).changes;
-}
-
-export function requeueFailedWorkerTasks(
-  maxAttempts = 3,
-  minAgeSeconds = 60
-) {
-  return getSqlite()
-    .prepare(
-      `UPDATE worker_tasks SET
-        status = 'queued',
-        error_message = CASE
-          WHEN error_message IS NULL OR error_message = '' THEN 'Auto-retry scheduled'
-          WHEN error_message LIKE '%(auto-retry)%' THEN error_message
-          ELSE error_message || ' (auto-retry)'
-        END,
-        finished_at = NULL,
-        updated_at = CURRENT_TIMESTAMP
-       WHERE status = 'failed'
-         AND attempts < ?
-         AND datetime(COALESCE(finished_at, updated_at)) <= datetime('now', ?)
-         AND NOT EXISTS (
-           SELECT 1 FROM worker_tasks active
-           WHERE active.type = worker_tasks.type
-             AND COALESCE(active.subscription_id, 0) = COALESCE(worker_tasks.subscription_id, 0)
-             AND active.status IN ('queued', 'running')
-             AND active.id != worker_tasks.id
-         )`
-    )
-    .run(maxAttempts, `-${Math.max(5, minAgeSeconds)} seconds`).changes;
 }
 
 export function resetRuntimeData() {

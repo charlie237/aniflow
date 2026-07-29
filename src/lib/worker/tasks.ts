@@ -1,9 +1,8 @@
 import {
   claimNextWorkerTask,
   completeWorkerTask,
-  failWorkerTask,
-  requeueFailedWorkerTasks,
-  requeueStaleWorkerTasks
+  failStaleWorkerTasks,
+  failWorkerTask
 } from "@/lib/db/repositories";
 import type { WorkerTask } from "@/lib/db/types";
 import {
@@ -33,12 +32,9 @@ export function kickWorkerTaskRunner() {
 }
 
 export async function processWorkerTaskQueue(maxTasks = 20) {
-  const stale = requeueStaleWorkerTasks();
-  const retried = requeueFailedWorkerTasks();
-  if (stale > 0 || retried > 0) {
-    console.log(
-      `[worker] requeue stale=${stale} failed_tasks=${retried}`
-    );
+  const stale = failStaleWorkerTasks();
+  if (stale > 0) {
+    console.log(`[worker] fail stale=${stale}`);
   }
 
   let processed = 0;

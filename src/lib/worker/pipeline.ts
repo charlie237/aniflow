@@ -92,6 +92,7 @@ export async function pollAllSubscriptions() {
     skipped: 0,
     failed: 0
   };
+  const errors: string[] = [];
 
   for (const subscription of listEnabledSubscriptions()) {
     try {
@@ -104,13 +105,19 @@ export async function pollAllSubscriptions() {
       totals.failed += result.failed;
     } catch (error) {
       totals.failed += 1;
-      console.error(
-        `[pipeline] poll failed for subscription#${subscription.id}: ${errorMessage(error)}`
-      );
+      const message = contextualError("Subscription poll failed", error, {
+        subscriptionId: subscription.id,
+        subscription: subscription.name
+      });
+      errors.push(message);
+      console.error(`[pipeline] ${message}`);
     }
   }
 
   await runDownloadMaintenance();
+  if (errors.length > 0) {
+    throw new Error(errors.join("\n"));
+  }
   return totals;
 }
 
@@ -243,7 +250,17 @@ async function pollSubscriptionFeed(subscriptionId: number): Promise<PipelineRes
         metadata.releaseRevision > knownRevision &&
         settings.replaceExistingOnRevision;
 
-      if (knownRevision == null && metadata.releaseRevision > 1) {
+      const existingJobIsActiveOrFailed =
+        existingJob != null &&
+        ["downloading", "waiting_file", "ready_to_rename", "failed"].includes(
+          existingJob.status
+        );
+
+      if (
+        knownRevision == null &&
+        metadata.releaseRevision > 1 &&
+        !existingJobIsActiveOrFailed
+      ) {
         createOrUpdateJob({
           subscriptionId: subscription.id,
           feedItemId: feedItem.id,
@@ -260,17 +277,11 @@ async function pollSubscriptionFeed(subscriptionId: number): Promise<PipelineRes
       if (!isKnownUpgrade) {
         if (
           existingJob &&
-          [
-            "discovered",
-            "queued",
-            "downloading",
-            "ready_to_rename",
-            "failed"
-          ].includes(existingJob.status)
+          ["discovered", "queued", "needs_review"].includes(existingJob.status)
         ) {
-          updateJobStatus(existingJob.id, "completed", {
+          updateJobStatus(existingJob.id, "skipped", {
             targetPath: libraryEpisode.path,
-            errorMessage: null
+            errorMessage: "Library episode already exists; download was not submitted"
           });
         }
         result.skipped += 1;
@@ -881,9 +892,13 @@ async function organizeJobFile(
       effectiveMetadata
     );
     if (preferredFeedItemId != null && preferredFeedItemId !== job.feedItemId) {
-      updateJobStatus(job.id, "skipped", {
+      updateJobStatus(job.id, "failed", {
         targetPath: file.path,
-        errorMessage: "Superseded by a newer release revision"
+        errorMessage: contextualError(
+          "Downloaded file was superseded",
+          "A newer release revision became preferred; clean the OpenList task and job directory manually, and do not retry this older revision",
+          { sourcePath: file.path, taskId: job.openlistTaskId }
+        )
       });
       return;
     }
@@ -1102,23 +1117,24 @@ function supersedeSiblingRevisionJobs(
 
 function markSupersededJob(feedItemId: number) {
   const job = getJobForItem(feedItemId);
-  // Also drop in-flight downloads for older revisions so a later v2 rename
-  // is not raced by the superseded job completing.
-  if (
-    !job ||
-    ![
-      "discovered",
-      "queued",
-      "needs_review",
-      "downloading",
-      "ready_to_rename"
-    ].includes(job.status)
-  ) {
+  if (!job) return;
+
+  if (["discovered", "queued", "needs_review"].includes(job.status)) {
+    updateJobStatus(job.id, "skipped", {
+      errorMessage: "Superseded by a newer release revision"
+    });
     return;
   }
-  updateJobStatus(job.id, "skipped", {
-    errorMessage: "Superseded by a newer release revision"
-  });
+
+  if (["downloading", "waiting_file", "ready_to_rename"].includes(job.status)) {
+    updateJobStatus(job.id, "failed", {
+      errorMessage: contextualError(
+        "Download superseded while remote work may still be active",
+        "A newer release revision became preferred; clean the OpenList task and job directory manually, and do not retry this older revision",
+        { taskId: job.openlistTaskId, targetPath: job.targetPath }
+      )
+    });
+  }
 }
 
 export function incomingPathForJob(jobId: number) {

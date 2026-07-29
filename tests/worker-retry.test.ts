@@ -11,14 +11,15 @@ const { getSqlite } = await import("@/lib/db/client");
 const {
   acquireWorkerLease,
   enqueueWorkerTask,
+  failStaleWorkerTasks,
   failWorkerTask,
   getWorkerTask,
   refreshWorkerLease,
-  releaseWorkerLease,
-  requeueFailedWorkerTasks
+  releaseWorkerLease
 } = await import("@/lib/db/repositories");
+const { processWorkerTaskQueue } = await import("@/lib/worker/tasks");
 
-describe("requeueFailedWorkerTasks", () => {
+describe("worker fail-stop and lease", () => {
   beforeAll(() => {
     getSqlite();
   });
@@ -37,70 +38,38 @@ describe("requeueFailedWorkerTasks", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("requeues failed tasks under the attempt limit after cooldown", () => {
+  it("leaves failed worker tasks stopped", async () => {
     const task = enqueueWorkerTask({ type: "scan_incoming" });
     expect(task).toBeTruthy();
     if (!task) return;
 
-    // Simulate a claimed+failed task with attempts=1 and finished in the past.
-    getSqlite()
-      .prepare(
-        `UPDATE worker_tasks SET
-          status = 'failed',
-          attempts = 1,
-          error_message = 'boom',
-          finished_at = datetime('now', '-2 minutes'),
-          updated_at = datetime('now', '-2 minutes')
-         WHERE id = ?`
-      )
-      .run(task.id);
+    failWorkerTask(task.id, "boom");
+    await processWorkerTaskQueue(0);
 
-    const changes = requeueFailedWorkerTasks(3, 60);
-    expect(changes).toBe(1);
-    const requeued = getWorkerTask(task.id);
-    expect(requeued?.status).toBe("queued");
-    expect(requeued?.errorMessage).toContain("auto-retry");
+    expect(getWorkerTask(task.id)).toMatchObject({
+      status: "failed",
+      errorMessage: "boom"
+    });
   });
 
-  it("does not requeue when attempts exhausted", () => {
+  it("fails stale running tasks instead of requeueing them", () => {
     const task = enqueueWorkerTask({ type: "submit_queued" });
     if (!task) return;
-
     getSqlite()
       .prepare(
         `UPDATE worker_tasks SET
-          status = 'failed',
-          attempts = 3,
-          finished_at = datetime('now', '-2 minutes'),
-          updated_at = datetime('now', '-2 minutes')
+          status = 'running',
+          attempts = 1,
+          updated_at = datetime('now', '-2 hours')
          WHERE id = ?`
       )
       .run(task.id);
 
-    expect(requeueFailedWorkerTasks(3, 60)).toBe(0);
-    expect(getWorkerTask(task.id)?.status).toBe("failed");
-  });
-
-  it("skips requeue when an active task of the same type exists", () => {
-    const failed = enqueueWorkerTask({ type: "poll_all" });
-    if (!failed) return;
-    failWorkerTask(failed.id, "network");
-    getSqlite()
-      .prepare(
-        `UPDATE worker_tasks SET
-          attempts = 1,
-          finished_at = datetime('now', '-2 minutes'),
-          updated_at = datetime('now', '-2 minutes')
-         WHERE id = ?`
-      )
-      .run(failed.id);
-
-    // New active poll_all
-    const active = enqueueWorkerTask({ type: "poll_all" });
-    expect(active?.status).toBe("queued");
-
-    expect(requeueFailedWorkerTasks(3, 60)).toBe(0);
-    expect(getWorkerTask(failed.id)?.status).toBe("failed");
+    expect(failStaleWorkerTasks(60)).toBe(1);
+    expect(getWorkerTask(task.id)).toMatchObject({
+      status: "failed",
+      errorMessage: "Worker task timed out; trigger it again manually"
+    });
   });
 
   it("allows only one process to hold an incoming mutation lease", () => {
