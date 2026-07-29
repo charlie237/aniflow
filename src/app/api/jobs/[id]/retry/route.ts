@@ -11,9 +11,38 @@ export async function POST(
   if (!Number.isInteger(jobId) || jobId <= 0) {
     return NextResponse.json({ error: "Invalid job id" }, { status: 400 });
   }
-  if (!getJob(jobId)) {
+  const job = getJob(jobId);
+  if (!job) {
     return NextResponse.json({ error: "Job not found" }, { status: 404 });
   }
-  await retryJob(jobId);
-  return NextResponse.json({ ok: true });
+  if (job.status !== "failed") {
+    return NextResponse.json(
+      { error: `Only failed jobs can be retried (current: ${job.status})` },
+      { status: 409 }
+    );
+  }
+
+  try {
+    await retryJob(jobId);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      { status: 409 }
+    );
+  }
+
+  const updated = getJob(jobId);
+  if (!updated) {
+    return NextResponse.json({ error: "Job not found after retry" }, { status: 404 });
+  }
+  if (updated.status !== "downloading") {
+    return NextResponse.json(
+      {
+        error: updated.errorMessage || `Retry ended in status ${updated.status}`,
+        data: updated
+      },
+      { status: 409 }
+    );
+  }
+  return NextResponse.json({ ok: true, data: updated });
 }

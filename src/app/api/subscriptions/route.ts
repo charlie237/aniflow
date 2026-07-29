@@ -17,9 +17,6 @@ const createSubscriptionSchema = z
     }),
     seasonNumber: z.coerce.number().int().min(0).max(99).optional(),
     destinationRoot: z.string().trim().min(1).optional(),
-    // Accepted for compatibility with older clients, but job-owned paths are
-    // now always derived from the download job id.
-    incomingPath: z.string().trim().min(1).nullable().optional(),
     tmdbSeriesId: z.coerce.number().int().positive().nullable().optional()
   })
   .strict();

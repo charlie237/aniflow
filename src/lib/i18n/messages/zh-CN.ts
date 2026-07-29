@@ -229,7 +229,10 @@ const zhCN = {
     archive: "归档",
     restore: "恢复追更",
     deleteTitle: "删除订阅",
-    deleteConfirm: "确认删除「{name}」？此操作不可撤销。",
+    deleteConfirm:
+      "确认删除「{name}」？此操作不可撤销，且不会删除 OpenList 中的任务或文件；请确认已经手动清理。",
+    deleteBlocked:
+      "该订阅仍有进行中的下载，暂时不能删除。请先归档，并等待任务完成或失败后手动处理。",
     confirmDelete: "确认删除",
     discoverOnly: "仅发现",
     save: "保存订阅",

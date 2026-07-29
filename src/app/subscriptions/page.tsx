@@ -1,7 +1,11 @@
 import { AppShell } from "@/components/app-shell";
 import { RssPreviewPanel } from "@/components/rss-preview-panel";
 import { SubscriptionForm } from "@/components/subscription-form";
-import { listRules, listSubscriptions } from "@/lib/db/repositories";
+import {
+  listRules,
+  listSubscriptionIdsWithInFlightJobs,
+  listSubscriptions
+} from "@/lib/db/repositories";
 import { getDictionary } from "@/lib/i18n/server";
 import { fetchRssPreview, type RssPreview } from "@/lib/rss/preview";
 
@@ -27,6 +31,7 @@ export default async function SubscriptionsPage({
 
   const subscriptions = listSubscriptions();
   const rules = listRules();
+  const deletionBlockedSubscriptionIds = listSubscriptionIdsWithInFlightJobs();
 
   return (
     <AppShell>
@@ -45,6 +50,7 @@ export default async function SubscriptionsPage({
           subscriptions={subscriptions}
           rules={rules}
           preview={preview}
+          deletionBlockedSubscriptionIds={deletionBlockedSubscriptionIds}
         />
       </div>
     </AppShell>

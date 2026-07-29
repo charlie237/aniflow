@@ -206,9 +206,46 @@ export function touchSubscriptionPolled(id: number) {
     .run();
 }
 
+export function listSubscriptionIdsWithInFlightJobs() {
+  return getDb()
+    .selectDistinct({ subscriptionId: downloadJobs.subscriptionId })
+    .from(downloadJobs)
+    .where(
+      inArray(downloadJobs.status, [
+        "downloading",
+        "waiting_file",
+        "ready_to_rename"
+      ])
+    )
+    .all()
+    .map((row) => row.subscriptionId);
+}
+
 export function deleteSubscription(id: number) {
   const db = getDb();
   db.transaction((tx) => {
+    const inFlight = tx
+      .select({ id: downloadJobs.id, status: downloadJobs.status })
+      .from(downloadJobs)
+      .where(
+        and(
+          eq(downloadJobs.subscriptionId, id),
+          inArray(downloadJobs.status, [
+            "downloading",
+            "waiting_file",
+            "ready_to_rename"
+          ])
+        )
+      )
+      .all();
+    if (inFlight.length > 0) {
+      throw new Error(
+        `Cannot delete subscription ${id} while download jobs are in flight: ${inFlight
+          .map((job) => `#${job.id}(${job.status})`)
+          .join(", ")}`
+      );
+    }
+
     tx.delete(episodeFiles).where(eq(episodeFiles.subscriptionId, id)).run();
     tx.delete(downloadJobs).where(eq(downloadJobs.subscriptionId, id)).run();
     tx.delete(releaseMetadata)

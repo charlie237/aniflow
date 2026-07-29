@@ -237,7 +237,10 @@ const en = {
     archive: "Archive",
     restore: "Resume tracking",
     deleteTitle: "Delete subscription",
-    deleteConfirm: "Delete “{name}”? This cannot be undone.",
+    deleteConfirm:
+      "Delete “{name}”? This cannot be undone and will not remove OpenList tasks or files; confirm they were cleaned manually.",
+    deleteBlocked:
+      "This subscription still has an in-flight download and cannot be deleted. Archive it, then wait for completion or failure and handle it manually.",
     confirmDelete: "Confirm delete",
     discoverOnly: "Discover only",
     save: "Save subscription",

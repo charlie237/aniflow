@@ -13,12 +13,14 @@ const {
   claimQueuedJob,
   createOrUpdateJob,
   createSubscription,
+  deleteSubscription,
   failStaleDownloadingJobs,
   getEpisodeFileForFeedItem,
   getJob,
   getJobForFeedItem,
   getLibraryEpisodeState,
   getSubscription,
+  listSubscriptionIdsWithInFlightJobs,
   restoreSubscription,
   saveSystemSettings,
   getSystemSettings,
@@ -36,11 +38,14 @@ const {
   submitQueuedJobs,
   syncSubscriptionLibrary
 } = await import("@/lib/worker/pipeline");
+const { POST: retryJobApi } = await import("@/app/api/jobs/[id]/retry/route");
+const { POST: confirmJobApi } = await import("@/app/api/jobs/[id]/confirm/route");
+const { POST: createSubscriptionApi } = await import("@/app/api/subscriptions/route");
 
 function seedDownloadJob(options: {
   name: string;
   sourceUrl: string;
-  status: "queued" | "downloading" | "failed";
+  status: "discovered" | "needs_review" | "queued" | "downloading" | "failed";
   episodeNumber?: number;
   releaseGroup?: string;
   targetPath?: string;
@@ -771,7 +776,7 @@ describe("download fail-stop lifecycle", () => {
     }
   });
 
-  it("fails instead of guessing when a job directory has multiple episode candidates", async () => {
+  it("fails instead of selecting from multiple media files", async () => {
     const seeded = seedDownloadJob({
       name: "Ambiguous Show",
       sourceUrl: "magnet:?xt=urn:btih:ambiguous-show",
@@ -795,7 +800,7 @@ describe("download fail-stop lifecycle", () => {
         data: {
           content: [
             { name: "Ambiguous.Show.S01E01.1080p.mkv", size: 1, is_dir: false },
-            { name: "Ambiguous.Show.S01E01.1080p.mp4", size: 2, is_dir: false }
+            { name: "Ambiguous.Show.S01E02.1080p.mp4", size: 2, is_dir: false }
           ]
         }
       })
@@ -810,7 +815,120 @@ describe("download fail-stop lifecycle", () => {
     }
   });
 
-  it("persists a manual retry error when the job directory was not cleaned", async () => {
+  it("fails when the only media file is for a different episode", async () => {
+    const seeded = seedDownloadJob({
+      name: "Wrong Episode",
+      sourceUrl: "magnet:?xt=urn:btih:wrong-episode",
+      status: "downloading"
+    });
+    const targetPath = incomingPathForJob(seeded.job.id);
+    getSqlite()
+      .prepare("UPDATE download_jobs SET target_path = ? WHERE id = ?")
+      .run(targetPath, seeded.job.id);
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming"
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        code: 200,
+        data: {
+          content: [
+            { name: "Wrong.Episode.S01E02.1080p.mkv", size: 1, is_dir: false }
+          ]
+        }
+      })
+    })));
+    try {
+      await scanAndRenameIncoming();
+      expect(getJob(seeded.job.id)?.status).toBe("failed");
+      expect(getJob(seeded.job.id)?.errorMessage).toContain(
+        "does not match expected episode 1"
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("rejects retry and confirm API calls from invalid job states", async () => {
+    const seeded = seedDownloadJob({
+      name: "Invalid Action State",
+      sourceUrl: "magnet:?xt=urn:btih:invalid-action-state",
+      status: "downloading"
+    });
+
+    const retryResponse = await retryJobApi(new Request("http://localhost"), {
+      params: Promise.resolve({ id: String(seeded.job.id) })
+    });
+    expect(retryResponse.status).toBe(409);
+    expect(await retryResponse.json()).toMatchObject({
+      error: expect.stringContaining("Only failed jobs")
+    });
+
+    const confirmResponse = await confirmJobApi(new Request("http://localhost"), {
+      params: Promise.resolve({ id: String(seeded.job.id) })
+    });
+    expect(confirmResponse.status).toBe(409);
+    expect(await confirmResponse.json()).toMatchObject({
+      error: expect.stringContaining("Only discovered or needs_review")
+    });
+    await expect(retryJob(seeded.job.id)).rejects.toThrow(/cannot be retried/i);
+    expect(getJob(seeded.job.id)?.status).toBe("downloading");
+  });
+
+  it("blocks subscription deletion while a download is in flight", () => {
+    const seeded = seedDownloadJob({
+      name: "Deletion Guard",
+      sourceUrl: "magnet:?xt=urn:btih:deletion-guard",
+      status: "downloading"
+    });
+
+    expect(listSubscriptionIdsWithInFlightJobs()).toContain(
+      seeded.subscription.id
+    );
+    expect(() => deleteSubscription(seeded.subscription.id)).toThrow(
+      /download jobs are in flight/i
+    );
+    expect(getSubscription(seeded.subscription.id)).not.toBeNull();
+
+    getSqlite()
+      .prepare("UPDATE download_jobs SET status = 'failed' WHERE id = ?")
+      .run(seeded.job.id);
+    expect(listSubscriptionIdsWithInFlightJobs()).not.toContain(
+      seeded.subscription.id
+    );
+    deleteSubscription(seeded.subscription.id);
+    expect(getSubscription(seeded.subscription.id)).toBeNull();
+  });
+
+  it("rejects the removed subscription incomingPath API field", async () => {
+    const response = await createSubscriptionApi(
+      new Request("http://localhost/api/subscriptions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Legacy Incoming API",
+          rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=9999",
+          incomingPath: "/115/Anime/_incoming/legacy"
+        })
+      })
+    );
+
+    expect(response.status).toBe(400);
+    expect(
+      (
+        getSqlite()
+          .prepare("SELECT COUNT(*) AS count FROM subscriptions")
+          .get() as { count: number }
+      ).count
+    ).toBe(0);
+  });
+
+  it("returns an API error when manual retry finds an uncleared directory", async () => {
     const seeded = seedDownloadJob({
       name: "Dirty Retry",
       sourceUrl: "magnet:?xt=urn:btih:dirty-retry",
@@ -840,7 +958,12 @@ describe("download fail-stop lifecycle", () => {
       };
     }));
     try {
-      await retryJob(seeded.job.id);
+      const response = await retryJobApi(new Request("http://localhost"), {
+        params: Promise.resolve({ id: String(seeded.job.id) })
+      });
+      const payload = await response.json() as { error?: string };
+      expect(response.status).toBe(409);
+      expect(payload.error).toContain("not empty");
       expect(addCalls).toBe(0);
       expect(getJob(seeded.job.id)).toMatchObject({
         status: "failed",

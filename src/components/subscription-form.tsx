@@ -48,11 +48,13 @@ import type { TranslateFn } from "@/lib/i18n";
 export function SubscriptionForm({
   subscriptions,
   rules,
-  preview
+  preview,
+  deletionBlockedSubscriptionIds
 }: {
   subscriptions: Subscription[];
   rules: FilterRule[];
   preview?: RssPreview | null;
+  deletionBlockedSubscriptionIds: number[];
 }) {
   const { t } = useI18n();
   return (
@@ -75,6 +77,7 @@ export function SubscriptionForm({
         <ExistingSubscriptions
           subscriptions={subscriptions}
           rules={rules}
+          deletionBlockedSubscriptionIds={deletionBlockedSubscriptionIds}
         />
       </CardContent>
     </Card>
@@ -270,10 +273,12 @@ function CreateFromPreview({ preview }: { preview: RssPreview }) {
 
 function ExistingSubscriptions({
   subscriptions,
-  rules
+  rules,
+  deletionBlockedSubscriptionIds
 }: {
   subscriptions: Subscription[];
   rules: FilterRule[];
+  deletionBlockedSubscriptionIds: number[];
 }) {
   const { t } = useI18n();
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -298,6 +303,7 @@ function ExistingSubscriptions({
         <SubscriptionGroup
           subscriptions={activeSubscriptions}
           rules={rules}
+          deletionBlockedSubscriptionIds={deletionBlockedSubscriptionIds}
           editingId={editingId}
           onToggleEdit={(id) =>
             setEditingId((current) => (current === id ? null : id))
@@ -318,6 +324,7 @@ function ExistingSubscriptions({
             <SubscriptionGroup
               subscriptions={archivedSubscriptions}
               rules={rules}
+              deletionBlockedSubscriptionIds={deletionBlockedSubscriptionIds}
               editingId={editingId}
               onToggleEdit={(id) =>
                 setEditingId((current) => (current === id ? null : id))
@@ -333,11 +340,13 @@ function ExistingSubscriptions({
 function SubscriptionGroup({
   subscriptions,
   rules,
+  deletionBlockedSubscriptionIds,
   editingId,
   onToggleEdit
 }: {
   subscriptions: Subscription[];
   rules: FilterRule[];
+  deletionBlockedSubscriptionIds: number[];
   editingId: number | null;
   onToggleEdit: (id: number) => void;
 }) {
@@ -348,6 +357,7 @@ function SubscriptionGroup({
           key={subscription.id}
           subscription={subscription}
           rules={rules.filter((rule) => rule.subscriptionId === subscription.id)}
+          deletionBlocked={deletionBlockedSubscriptionIds.includes(subscription.id)}
           isEditing={editingId === subscription.id}
           onToggleEdit={() => onToggleEdit(subscription.id)}
         />
@@ -359,11 +369,13 @@ function SubscriptionGroup({
 function SubscriptionItem({
   subscription,
   rules,
+  deletionBlocked,
   isEditing,
   onToggleEdit
 }: {
   subscription: Subscription;
   rules: FilterRule[];
+  deletionBlocked: boolean;
   isEditing: boolean;
   onToggleEdit: () => void;
 }) {
@@ -402,7 +414,10 @@ function SubscriptionItem({
               {subscription.enabled ? t("subscription.archive") : t("subscription.restore")}
             </Button>
           </form>
-          <DeleteSubscriptionDialog subscription={subscription} />
+          <DeleteSubscriptionDialog
+            subscription={subscription}
+            deletionBlocked={deletionBlocked}
+          />
         </div>
       </div>
       <SubscriptionSummary subscription={subscription} rules={rules} />
@@ -414,9 +429,11 @@ function SubscriptionItem({
 }
 
 function DeleteSubscriptionDialog({
-  subscription
+  subscription,
+  deletionBlocked
 }: {
   subscription: Subscription;
+  deletionBlocked: boolean;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
@@ -436,7 +453,9 @@ function DeleteSubscriptionDialog({
         <DialogHeader>
           <DialogTitle>{t("subscription.deleteTitle")}</DialogTitle>
           <DialogDescription>
-            {t("subscription.deleteConfirm", { name: subscription.name })}
+            {deletionBlocked
+              ? t("subscription.deleteBlocked")
+              : t("subscription.deleteConfirm", { name: subscription.name })}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -453,7 +472,7 @@ function DeleteSubscriptionDialog({
             >
               {t("common.cancel")}
             </Button>
-            <Button type="submit" variant="danger">
+            <Button type="submit" variant="danger" disabled={deletionBlocked}>
               <Trash2 />
               {t("subscription.confirmDelete")}
             </Button>

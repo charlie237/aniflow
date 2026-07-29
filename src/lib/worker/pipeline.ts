@@ -435,6 +435,11 @@ export async function reconcileDownloadingJobs() {
 export async function retryJob(jobId: number) {
   const job = getJob(jobId);
   if (!job) throw new Error(`Job ${jobId} not found`);
+  if (job.status !== "failed") {
+    throw new Error(
+      `Job ${jobId} cannot be retried from status ${job.status}; expected failed`
+    );
+  }
   const targetPath = incomingPathForJob(job.id);
   try {
     await assertJobTargetDirectoryEmpty(targetPath, "Cannot resubmit download");
@@ -467,6 +472,11 @@ export async function retryJob(jobId: number) {
 export async function confirmJob(jobId: number) {
   const job = getJob(jobId);
   if (!job) throw new Error(`Job ${jobId} not found`);
+  if (!["discovered", "needs_review"].includes(job.status)) {
+    throw new Error(
+      `Job ${jobId} cannot be confirmed from status ${job.status}; expected discovered or needs_review`
+    );
+  }
   console.log(`[pipeline] confirm job#${job.id}`);
   updateJobStatus(job.id, "queued", {
     errorMessage: null,
@@ -756,24 +766,11 @@ async function scanJobTarget(job: DownloadJob) {
   }
   if (files.length === 0) return;
 
-  const candidates = files.filter((file) => {
-    const parsed = parseReleaseTitle(file.name);
-    const episode =
-      parsed.episodeNumber ??
-      extractEpisodeNumberFromFilename({
-        filename: file.name,
-        seasonNumber: subscription.seasonNumber,
-        episodeFileTemplate: getSystemSettings().episodeFileTemplate
-      });
-    return episode === metadata.episodeNumber;
-  });
-  if (candidates.length !== 1) {
+  if (files.length !== 1) {
     updateJobStatus(job.id, "failed", {
       errorMessage: contextualError(
         "Downloaded file validation failed",
-        candidates.length === 0
-          ? `No media file matches expected episode ${metadata.episodeNumber}`
-          : `Multiple media files match expected episode ${metadata.episodeNumber}`,
+        `Multiple media files found; expected exactly one for episode ${metadata.episodeNumber}`,
         {
           targetPath,
           files: files.map((file) => file.name).join(", ")
@@ -783,7 +780,27 @@ async function scanJobTarget(job: DownloadJob) {
     return;
   }
 
-  await organizeJobFile(candidates[0], subscription, job, metadata.episodeNumber);
+  const file = files[0];
+  const parsed = parseReleaseTitle(file.name);
+  const episode =
+    parsed.episodeNumber ??
+    extractEpisodeNumberFromFilename({
+      filename: file.name,
+      seasonNumber: subscription.seasonNumber,
+      episodeFileTemplate: getSystemSettings().episodeFileTemplate
+    });
+  if (episode !== metadata.episodeNumber) {
+    updateJobStatus(job.id, "failed", {
+      errorMessage: contextualError(
+        "Downloaded file validation failed",
+        `Media file episode ${episode ?? "unknown"} does not match expected episode ${metadata.episodeNumber}`,
+        { targetPath, file: file.name }
+      )
+    });
+    return;
+  }
+
+  await organizeJobFile(file, subscription, job, metadata.episodeNumber);
 }
 
 async function organizeJobFile(
