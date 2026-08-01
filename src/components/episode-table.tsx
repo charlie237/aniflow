@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import {
   confirmJobAction,
+  forceConfirmJobAction,
   manualSupplementEpisodeAction,
   retryJobAction
 } from "@/app/actions";
@@ -371,6 +372,19 @@ export function EpisodeTable({
                             variant="ghost"
                             aria-label={t("episode.confirmDownload")}
                             title={t("episode.confirmDownloadTitle")}
+                          >
+                            <CheckCircle2 className="size-4" />
+                          </Button>
+                        </form>
+                      ) : null}
+                      {row.job?.status === "skipped" ? (
+                        <form action={forceConfirmJobAction}>
+                          <input type="hidden" name="id" value={row.job.id} />
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            aria-label={t("episode.forceDownload")}
+                            title={t("episode.forceDownloadTitle")}
                           >
                             <CheckCircle2 className="size-4" />
                           </Button>

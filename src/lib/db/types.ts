@@ -95,6 +95,8 @@ export interface DownloadJob {
   feedItemId: number;
   status: JobStatus;
   openlistTaskId: string | null;
+  /** User-forced download of a superseded / skipped release. */
+  forceDownload: boolean;
   /** BitTorrent info-hash (hex), when known. */
   infoHash: string | null;
   /** OpenList offline task name or magnet display name. */

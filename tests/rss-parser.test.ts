@@ -84,6 +84,25 @@ describe("parseRss", () => {
     // Mikan naive time is China local (UTC+8) → store real UTC
     expect(items[0]?.publishedAt).toBe("2026-07-08T20:08:42.455Z");
   });
+
+  it("treats space-formatted naive pubDate as China local, not SQLite UTC", () => {
+    const xml = `<?xml version="1.0"?>
+      <rss version="2.0">
+        <channel>
+          <item>
+            <title>[Group] Test Anime - 05 [1080p][CHS].mkv</title>
+            <guid>episode-5-space</guid>
+            <link>https://mikanani.me/Home/Episode/abc</link>
+            <enclosure url="https://mikanani.me/Download/episode-5-space.torrent" type="application/x-bittorrent" />
+            <pubDate>2026-07-09 04:08:42</pubDate>
+          </item>
+        </channel>
+      </rss>`;
+
+    const items = parseRss(xml);
+
+    expect(items[0]?.publishedAt).toBe("2026-07-08T20:08:42.000Z");
+  });
 });
 
 

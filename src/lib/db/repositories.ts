@@ -20,6 +20,7 @@ export {
   listJobsByStatus,
   markJobAttempt,
   migrateLegacyDownloadJobsToFailed,
+  touchJobActivity,
   updateJobStatus
 } from "@/lib/db/repositories/download-job-repository";
 

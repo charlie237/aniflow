@@ -45,7 +45,13 @@ const { POST: createSubscriptionApi } = await import("@/app/api/subscriptions/ro
 function seedDownloadJob(options: {
   name: string;
   sourceUrl: string;
-  status: "discovered" | "needs_review" | "queued" | "downloading" | "failed";
+  status:
+    | "discovered"
+    | "needs_review"
+    | "queued"
+    | "downloading"
+    | "skipped"
+    | "failed";
   episodeNumber?: number;
   releaseGroup?: string;
   targetPath?: string;
@@ -346,7 +352,7 @@ describe("download fail-stop lifecycle", () => {
     expect(job?.errorMessage).toMatch(/Rename timed out/i);
   });
 
-  it("fails a stale download without extending the timeout from task polling", async () => {
+  it("extends the timeout while its OpenList task is still running", async () => {
     const sub = createSubscription({
       name: "Active Download",
       rssUrl: "https://example.com/rss-active-download",
@@ -413,16 +419,83 @@ describe("download fail-stop lifecycle", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
     try {
-      expect(await reconcileDownloadingJobs()).toEqual({ checked: 1, failed: 1 });
+      expect(await reconcileDownloadingJobs()).toEqual({ checked: 1, failed: 0 });
       expect(fetchMock).toHaveBeenCalledTimes(3);
-      expect(getJob(job.id)?.status).toBe("failed");
-      expect(getJob(job.id)?.openlistTaskId).toBe("active-task");
+      expect(getJob(job.id)?.status).toBe("downloading");
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it("fails a tracked download when OpenList task lists are unavailable", async () => {
+  it("fails a tracked download when its OpenList task reports failure", async () => {
+    const sub = createSubscription({
+      name: "Failed Task State",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=8101",
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+    const feed = upsertFeedItem(sub, {
+      guid: "failed-task-1",
+      title: "[G] Failed Task State - 01 [1080p][CHS].mkv",
+      downloadUrl: "magnet:?xt=urn:btih:failed-task",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Failed Task State",
+        episodeNumber: 1,
+        episodeText: "01",
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 80,
+        needsReview: false
+      }
+    });
+    const job = createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: feed.id,
+      status: "downloading",
+      sourceUrl: "magnet:?xt=urn:btih:failed-task",
+      openlistTaskId: "remote-task"
+    });
+    if (!job) return;
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      downloadTimeoutMinutes: 1
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => ({
+      ok: true,
+      json: async () => ({
+        code: 200,
+        data: String(input).endsWith("/api/task/offline_download/undone")
+          ? [
+              {
+                id: "remote-task",
+                name: "episode",
+                state: 3,
+                status: "error",
+                progress: 0,
+                error: "seed lost"
+              }
+            ]
+          : []
+      })
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      expect(await reconcileDownloadingJobs()).toEqual({ checked: 1, failed: 1 });
+      expect(getJob(job.id)?.status).toBe("failed");
+      expect(getJob(job.id)?.errorMessage).toContain("seed lost");
+      expect(getJob(job.id)?.openlistTaskId).toBe("remote-task");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps a download active when OpenList task lists are unavailable", async () => {
     const sub = createSubscription({
       name: "Unavailable Task State",
       rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=8101",
@@ -455,11 +528,6 @@ describe("download fail-stop lifecycle", () => {
       openlistTaskId: "remote-task"
     });
     if (!job) return;
-    getSqlite()
-      .prepare(
-        "UPDATE download_jobs SET attempts = 1, updated_at = datetime('now', '-2 hours') WHERE id = ?"
-      )
-      .run(job.id);
     saveSystemSettings({
       ...getSystemSettings(),
       openlistBaseUrl: "http://openlist.local",
@@ -468,10 +536,9 @@ describe("download fail-stop lifecycle", () => {
     });
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("OpenList offline")));
     try {
-      expect(await reconcileDownloadingJobs()).toEqual({ checked: 1, failed: 1 });
-      expect(getJob(job.id)?.status).toBe("failed");
-      expect(getJob(job.id)?.errorMessage).toContain("OpenList offline");
-      expect(getJob(job.id)?.openlistTaskId).toBe("remote-task");
+      expect(await reconcileDownloadingJobs()).toEqual({ checked: 1, failed: 0 });
+      expect(getJob(job.id)?.status).toBe("downloading");
+      expect(getJob(job.id)?.errorMessage).toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -981,6 +1048,174 @@ describe("download fail-stop lifecycle", () => {
     }
   });
 
+  it("scans from the stored target path when the incoming root changed", async () => {
+    const seeded = seedDownloadJob({
+      name: "Moved Incoming",
+      sourceUrl: "magnet:?xt=urn:btih:moved-incoming",
+      status: "downloading"
+    });
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/New/_incoming",
+      mediaLibraryRoot: "/115/Anime"
+    });
+    const oldTargetPath = `/115/Anime/_incoming/jobs/${seeded.job.id}`;
+    getSqlite()
+      .prepare("UPDATE download_jobs SET target_path = ? WHERE id = ?")
+      .run(oldTargetPath, seeded.job.id);
+    const downloadedName = "[G] Moved Incoming - 01 [1080p][CHS].mkv";
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const endpoint = String(input);
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      const isJobList =
+        endpoint.endsWith("/api/fs/list") && body.path === oldTargetPath;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 200,
+          data: isJobList
+            ? { content: [{ name: downloadedName, size: 123, is_dir: false }] }
+            : { content: [] }
+        })
+      };
+    }));
+    try {
+      await scanAndRenameIncoming();
+      expect(getJob(seeded.job.id)?.status).toBe("completed");
+      expect(getJob(seeded.job.id)?.targetPath).toContain(
+        "/115/Anime/Moved Incoming/Season 01"
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("still fails jobs targeting a legacy shared directory", async () => {
+    const seeded = seedDownloadJob({
+      name: "Legacy Shared",
+      sourceUrl: "magnet:?xt=urn:btih:legacy-shared",
+      status: "downloading"
+    });
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming"
+    });
+    getSqlite()
+      .prepare("UPDATE download_jobs SET target_path = ? WHERE id = ?")
+      .run("/115/Anime/_incoming", seeded.job.id);
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ code: 200, data: { content: [] } })
+    })));
+    try {
+      await scanAndRenameIncoming();
+      expect(getJob(seeded.job.id)?.status).toBe("failed");
+      expect(getJob(seeded.job.id)?.errorMessage).toContain(
+        "legacy shared download directory"
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("confirms a forced download of a skipped job", async () => {
+    const seeded = seedDownloadJob({
+      name: "Forced Skip",
+      sourceUrl: "magnet:?xt=urn:btih:forced-skip",
+      status: "skipped"
+    });
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming"
+    });
+    const rejected = await confirmJobApi(new Request("http://localhost"), {
+      params: Promise.resolve({ id: String(seeded.job.id) })
+    });
+    expect(rejected.status).toBe(409);
+
+    let addCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const endpoint = String(input);
+      if (endpoint.endsWith("/api/fs/add_offline_download")) addCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 200,
+          data: endpoint.endsWith("/api/fs/list")
+            ? { content: [] }
+            : endpoint.endsWith("/api/fs/add_offline_download")
+              ? { tasks: [{ id: "forced-task", error: "" }] }
+              : null
+        })
+      };
+    }));
+    try {
+      const response = await confirmJobApi(
+        new Request("http://localhost", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ force: true })
+        }),
+        { params: Promise.resolve({ id: String(seeded.job.id) }) }
+      );
+      expect(response.status).toBe(200);
+      expect(addCalls).toBe(1);
+      expect(getJob(seeded.job.id)).toMatchObject({
+        status: "downloading",
+        forceDownload: true,
+        openlistTaskId: "forced-task"
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("fails when the only media file contains an episode range", async () => {
+    const seeded = seedDownloadJob({
+      name: "Range Batch",
+      sourceUrl: "magnet:?xt=urn:btih:range-batch",
+      status: "downloading"
+    });
+    const targetPath = incomingPathForJob(seeded.job.id);
+    getSqlite()
+      .prepare("UPDATE download_jobs SET target_path = ? WHERE id = ?")
+      .run(targetPath, seeded.job.id);
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming"
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        code: 200,
+        data: {
+          content: [
+            { name: "Range.Batch.01-13.1080p.mkv", size: 1, is_dir: false }
+          ]
+        }
+      })
+    })));
+    try {
+      await scanAndRenameIncoming();
+      expect(getJob(seeded.job.id)?.status).toBe("failed");
+      expect(getJob(seeded.job.id)?.errorMessage).toContain("episode range");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("fails when the only media file is for a different episode", async () => {
     const seeded = seedDownloadJob({
       name: "Wrong Episode",
@@ -1040,7 +1275,7 @@ describe("download fail-stop lifecycle", () => {
     });
     expect(confirmResponse.status).toBe(409);
     expect(await confirmResponse.json()).toMatchObject({
-      error: expect.stringContaining("Only discovered or needs_review")
+      error: expect.stringContaining("Only discovered, needs_review, or skipped")
     });
     await expect(retryJob(seeded.job.id)).rejects.toThrow(/cannot be retried/i);
     expect(getJob(seeded.job.id)?.status).toBe("downloading");
@@ -1142,4 +1377,103 @@ describe("download fail-stop lifecycle", () => {
     }
   });
 
+  it("blocks retry when the library already has the episode", async () => {
+    const seeded = seedDownloadJob({
+      name: "Library Retry Block",
+      sourceUrl: "magnet:?xt=urn:btih:library-retry-block",
+      status: "failed"
+    });
+    const finalPath =
+      "/115/Anime/Library Retry Block/Season 01/Library Retry Block - S01E01.mkv";
+    upsertEpisodeFile({
+      subscriptionId: seeded.subscription.id,
+      feedItemId: seeded.feed.id,
+      episodeNumber: 1,
+      originalPath: finalPath,
+      finalPath,
+      sizeBytes: 100,
+      status: "renamed"
+    });
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming",
+      replaceExistingOnRevision: false
+    });
+    let addCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const endpoint = String(input);
+      if (endpoint.endsWith("/api/fs/add_offline_download")) addCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 200,
+          data: endpoint.endsWith("/api/fs/list") ? { content: [] } : null
+        })
+      };
+    }));
+    try {
+      await retryJob(seeded.job.id);
+      expect(addCalls).toBe(0);
+      expect(getJob(seeded.job.id)?.status).toBe("failed");
+      expect(getJob(seeded.job.id)?.errorMessage).toContain(
+        "Library episode already exists"
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("retries when the library episode allows replacement", async () => {
+    const seeded = seedDownloadJob({
+      name: "Library Retry Replace",
+      sourceUrl: "magnet:?xt=urn:btih:library-retry-replace",
+      status: "failed"
+    });
+    const finalPath =
+      "/115/Anime/Library Retry Replace/Season 01/Library Retry Replace - S01E01.mkv";
+    upsertEpisodeFile({
+      subscriptionId: seeded.subscription.id,
+      feedItemId: seeded.feed.id,
+      episodeNumber: 1,
+      originalPath: finalPath,
+      finalPath,
+      sizeBytes: 100,
+      status: "renamed"
+    });
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming",
+      replaceExistingOnRevision: true
+    });
+    let addCalls = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const endpoint = String(input);
+      if (endpoint.endsWith("/api/fs/add_offline_download")) addCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 200,
+          data: endpoint.endsWith("/api/fs/list")
+            ? { content: [] }
+            : endpoint.endsWith("/api/fs/add_offline_download")
+              ? { tasks: [{ id: "replace-task", error: "" }] }
+              : null
+        })
+      };
+    }));
+    try {
+      await retryJob(seeded.job.id);
+      expect(addCalls).toBe(1);
+      expect(getJob(seeded.job.id)?.status).toBe("downloading");
+      expect(getJob(seeded.job.id)?.openlistTaskId).toBe("replace-task");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

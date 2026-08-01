@@ -147,6 +147,7 @@ export function updateJobStatus(
     targetPath?: string | null;
     errorMessage?: string | null;
     scanMissCount?: number;
+    forceDownload?: boolean;
   }
 ) {
   getDb()
@@ -158,6 +159,12 @@ export function updateJobStatus(
         : fields?.openlistTaskId
           ? fields.openlistTaskId
           : sql`${downloadJobs.openlistTaskId}`,
+      forceDownload:
+        fields?.forceDownload !== undefined
+          ? fields.forceDownload
+            ? 1
+            : 0
+          : sql`${downloadJobs.forceDownload}`,
       infoHash:
         fields?.infoHash !== undefined
           ? fields.infoHash
@@ -202,6 +209,25 @@ export function migrateLegacyDownloadJobsToFailed() {
       )
     )
     .run().changes;
+}
+
+/**
+ * Refresh a job's activity timestamp without touching status or fields.
+ * Skips jobs refreshed more recently than `minAgeSeconds` so active downloads
+ * do not re-order the dashboard on every maintenance cycle.
+ */
+export function touchJobActivity(jobId: number, minAgeSeconds = 600) {
+  const ageOffset = `-${Math.max(60, minAgeSeconds)} seconds`;
+  getDb()
+    .update(downloadJobs)
+    .set({ updatedAt: sql`CURRENT_TIMESTAMP` })
+    .where(
+      and(
+        eq(downloadJobs.id, jobId),
+        sql`datetime(${downloadJobs.updatedAt}) <= datetime('now', ${ageOffset})`
+      )
+    )
+    .run();
 }
 
 export function claimQueuedJob(jobId: number, targetPath?: string) {

@@ -168,6 +168,12 @@ function bootstrapSchema(database: Database.Database) {
   ensureColumn(
     database,
     "download_jobs",
+    "force_download",
+    "INTEGER NOT NULL DEFAULT 0"
+  );
+  ensureColumn(
+    database,
+    "download_jobs",
     "scan_miss_count",
     "INTEGER NOT NULL DEFAULT 0"
   );

@@ -148,6 +148,8 @@ const zhCN = {
     retryDownloadTitle: "请先清理 OpenList 任务和对应 job 目录，再重新提交",
     confirmDownload: "确认下载",
     confirmDownloadTitle: "确认并提交下载",
+    forceDownload: "强制下载",
+    forceDownloadTitle: "该发布已被更高版本取代；强制忽略版本策略下载并整理",
     noFile: "未发现文件",
     multiFiles: " / {count} 个文件",
     unparsed: "未解析",

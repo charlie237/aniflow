@@ -28,7 +28,6 @@ export async function fetchText(url: string, options: FetchTextOptions = {}) {
     const response = await fetch(target, {
       headers: options.headers,
       cache: "no-store",
-      redirect: "manual",
       signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
     });
     const body = (await readFetchBody(response)).toString("utf8");
@@ -49,7 +48,6 @@ export async function fetchBytes(url: string, options: FetchBytesOptions = {}) {
     const response = await fetch(target, {
       headers: options.headers,
       cache: "no-store",
-      redirect: "manual",
       signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
     });
     const body = await readFetchBody(response);

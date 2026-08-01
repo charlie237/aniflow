@@ -1,4 +1,4 @@
-import { and, desc, eq, max, or, sql } from "drizzle-orm";
+import { and, desc, eq, max, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db/client";
 import { mapFeedItem, mapMetadata } from "@/lib/db/mappers";
 import { episodeFiles, feedItems, releaseMetadata } from "@/lib/db/schema";
@@ -43,38 +43,54 @@ export function upsertFeedItem(subscription: Subscription, item: ParsedFeedInput
       .onConflictDoNothing()
       .run();
 
-    const feedRow = tx
+    const byGuid = tx
       .select()
       .from(feedItems)
       .where(
         and(
           eq(feedItems.subscriptionId, subscription.id),
-          or(
-            eq(feedItems.guid, item.guid),
-            item.downloadUrl ? eq(feedItems.downloadUrl, item.downloadUrl) : sql`0`
-          )
+          eq(feedItems.guid, item.guid)
         )
       )
-      .orderBy(desc(feedItems.id))
-      .limit(1)
       .get();
+    // Guid match wins. A URL-only match means a duplicate of the same release
+    // with a different guid: reuse the existing row but keep its identity —
+    // do not overwrite title/guid with the new item's data.
+    const feedRow =
+      byGuid ??
+      (item.downloadUrl
+        ? tx
+            .select()
+            .from(feedItems)
+            .where(
+              and(
+                eq(feedItems.subscriptionId, subscription.id),
+                eq(feedItems.downloadUrl, item.downloadUrl)
+              )
+            )
+            .orderBy(desc(feedItems.id))
+            .limit(1)
+            .get()
+        : undefined);
     if (!feedRow) throw new Error("Failed to read feed item after insert");
 
-    tx.update(feedItems)
-      .set({
-        rssGuid: item.rssGuid ?? null,
-        title: item.title,
-        link: item.link ?? null,
-        downloadUrl: item.downloadUrl
-          ? item.downloadUrl
-          : sql`${feedItems.downloadUrl}`,
-        publishedAt: item.publishedAt
-          ? item.publishedAt
-          : sql`${feedItems.publishedAt}`,
-        rawXmlJson: item.rawXmlJson ?? null
-      })
-      .where(eq(feedItems.id, feedRow.id))
-      .run();
+    if (byGuid) {
+      tx.update(feedItems)
+        .set({
+          rssGuid: item.rssGuid ?? null,
+          title: item.title,
+          link: item.link ?? null,
+          downloadUrl: item.downloadUrl
+            ? item.downloadUrl
+            : sql`${feedItems.downloadUrl}`,
+          publishedAt: item.publishedAt
+            ? item.publishedAt
+            : sql`${feedItems.publishedAt}`,
+          rawXmlJson: item.rawXmlJson ?? null
+        })
+        .where(eq(feedItems.id, feedRow.id))
+        .run();
+    }
 
     const updated = tx
       .select()

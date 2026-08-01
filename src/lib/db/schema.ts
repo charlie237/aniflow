@@ -110,6 +110,11 @@ export const downloadJobs = sqliteTable(
       .references(() => feedItems.id, { onDelete: "cascade" }),
     status: text("status").notNull(),
     openlistTaskId: text("openlist_task_id"),
+    /**
+     * User-forced download of a superseded / skipped release: bypasses the
+     * preferred-revision guards at submit and organize time.
+     */
+    forceDownload: integer("force_download").notNull().default(0),
     /** BitTorrent info-hash (hex), set when torrent/magnet is resolved. */
     infoHash: text("info_hash"),
     /**

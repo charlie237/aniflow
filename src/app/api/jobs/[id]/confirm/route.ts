@@ -3,7 +3,7 @@ import { getJob } from "@/lib/db/repositories";
 import { confirmJob } from "@/lib/worker/pipeline";
 
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
@@ -15,17 +15,22 @@ export async function POST(
   if (!job) {
     return NextResponse.json({ error: "Job not found" }, { status: 404 });
   }
-  if (!["discovered", "needs_review"].includes(job.status)) {
+  const json = await request.json().catch(() => null);
+  const force = Boolean((json as { force?: unknown } | null)?.force);
+  if (
+    !["discovered", "needs_review"].includes(job.status) &&
+    !(force && job.status === "skipped")
+  ) {
     return NextResponse.json(
       {
-        error: `Only discovered or needs_review jobs can be confirmed (current: ${job.status})`
+        error: `Only discovered, needs_review, or skipped (with force) jobs can be confirmed (current: ${job.status})`
       },
       { status: 409 }
     );
   }
 
   try {
-    await confirmJob(jobId);
+    await confirmJob(jobId, { force });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : String(error) },

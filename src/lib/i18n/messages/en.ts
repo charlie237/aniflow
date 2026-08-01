@@ -154,6 +154,8 @@ const en = {
     retryDownloadTitle: "Clean the OpenList task and its job directory before resubmitting",
     confirmDownload: "Confirm download",
     confirmDownloadTitle: "Confirm and submit download",
+    forceDownload: "Force download",
+    forceDownloadTitle: "This release is superseded; ignore the revision policy and download/organize anyway",
     noFile: "No file found",
     multiFiles: " / {count} files",
     unparsed: "Unparsed",

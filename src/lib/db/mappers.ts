@@ -81,6 +81,7 @@ export function mapJob(row: Record<string, unknown>): DownloadJob {
     feedItemId: Number(pick(row, "feedItemId", "feed_item_id")),
     status: pick(row, "status") as DownloadJob["status"],
     openlistTaskId: nullableString(pick(row, "openlistTaskId", "openlist_task_id")),
+    forceDownload: Boolean(pick(row, "forceDownload", "force_download")),
     infoHash: nullableString(pick(row, "infoHash", "info_hash")),
     offlineName: nullableString(pick(row, "offlineName", "offline_name")),
     sourceUrl: nullableString(pick(row, "sourceUrl", "source_url")),

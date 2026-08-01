@@ -163,5 +163,11 @@ function extractPublishedAt(item: Record<string, unknown>) {
 
 function normalizeDate(value: string | null) {
   // Naive Mikan times are China local; toStoredUtcIso converts to real UTC.
-  return toStoredUtcIso(value);
+  // Space-formatted naive times (YYYY-MM-DD HH:MM:SS) must not be misread as
+  // the SQLite UTC storage format, so normalize them to ISO "T" form first.
+  const isoLike = value?.replace(
+    /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?)$/,
+    "$1T$2"
+  );
+  return toStoredUtcIso(isoLike);
 }

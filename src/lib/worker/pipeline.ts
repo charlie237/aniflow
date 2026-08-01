@@ -30,6 +30,7 @@ import {
   refreshWorkerLease,
   releaseWorkerLease,
   syncLibraryEpisodeInventory,
+  touchJobActivity,
   touchSubscriptionPolled,
   updateJobStatus,
   upsertEpisodeFile,
@@ -83,6 +84,9 @@ export interface PipelineResult {
 
 const INCOMING_MUTATION_LEASE = "incoming-mutation";
 const INCOMING_MUTATION_LEASE_SECONDS = 2 * 60 * 60;
+
+/** Episode ranges like "01-13" / "01~13" in a single filename: batch releases. */
+const EPISODE_RANGE_RE = /\b\d{1,3}\s*[-~～至]\s*\d{1,3}\b/;
 
 export async function pollAllSubscriptions() {
   const totals: PipelineResult = {
@@ -378,6 +382,13 @@ export async function submitQueuedJobs() {
 /**
  * Surface exact OpenList task failures. The task id is diagnostic only: files
  * are always discovered from the job-owned target_path.
+ *
+ * Fail-stop policy: a job is only failed on a *confirmed* signal —
+ * (a) the OpenList task itself reports failure, or (b) no activity can be
+ * confirmed for `downloadTimeoutMinutes`. A task that is present and not
+ * failed refreshes the job's activity timestamp, so long downloads and the
+ * post-download transfer phase are never killed by the wall-clock timer.
+ * Transient OpenList list failures are logged, never treated as job failure.
  */
 export async function reconcileDownloadingJobs() {
   const settings = getSystemSettings();
@@ -406,9 +417,14 @@ export async function reconcileDownloadingJobs() {
       { name: "offline_download/undone", result: undoneResult },
       { name: "offline_download/done", result: doneResult },
       { name: "offline_download_transfer/undone", result: transferringResult }
-    ]
-      .filter(({ result }) => !result.available)
-      .map(({ name, result }) => `${name}: ${result.error ?? "unavailable"}`);
+    ].filter(({ result }) => !result.available);
+    if (unavailable.length > 0) {
+      console.warn(
+        `[pipeline] OpenList task list unavailable; keeping ${openJobs.length} downloading job(s) active until confirmed failure or timeout: ${unavailable
+          .map(({ name, result }) => `${name}: ${result.error ?? "unavailable"}`)
+          .join("; ")}`
+      );
+    }
 
     for (const job of openJobs) {
       if (!job.openlistTaskId) continue;
@@ -425,15 +441,10 @@ export async function reconcileDownloadingJobs() {
         failed += 1;
         continue;
       }
-      if (!task && unavailable.length > 0) {
-        updateJobStatus(job.id, "failed", {
-          errorMessage: contextualError(
-            "Unable to query OpenList offline task",
-            unavailable.join("; "),
-            { taskId, targetPath: job.targetPath }
-          )
-        });
-        failed += 1;
+      if (task) {
+        // Task is present and not failed: confirmed working, keep the job alive.
+        // Half-window throttle avoids re-ordering the dashboard on every cycle.
+        touchJobActivity(job.id, Math.floor(staleSeconds / 2));
       }
     }
   }
@@ -480,20 +491,25 @@ export async function retryJob(jobId: number) {
   });
 }
 
-export async function confirmJob(jobId: number) {
+export async function confirmJob(
+  jobId: number,
+  options?: { force?: boolean }
+) {
   const job = getJob(jobId);
   if (!job) throw new Error(`Job ${jobId} not found`);
-  if (!["discovered", "needs_review"].includes(job.status)) {
+  const force = options?.force ?? false;
+  if (!["discovered", "needs_review"].includes(job.status) && !(force && job.status === "skipped")) {
     throw new Error(
-      `Job ${jobId} cannot be confirmed from status ${job.status}; expected discovered or needs_review`
+      `Job ${jobId} cannot be confirmed from status ${job.status}; expected discovered, needs_review, or skipped (forced)`
     );
   }
-  console.log(`[pipeline] confirm job#${job.id}`);
+  console.log(`[pipeline] confirm job#${job.id}${force ? " (forced)" : ""}`);
   updateJobStatus(job.id, "queued", {
     errorMessage: null,
-    clearOpenlistTaskId: true
+    clearOpenlistTaskId: true,
+    forceDownload: force
   });
-  await submitJob({ ...job, status: "queued", openlistTaskId: null });
+  await submitJob({ ...job, status: "queued", openlistTaskId: null, forceDownload: force });
 }
 
 export async function submitJob(job: DownloadJob) {
@@ -537,7 +553,7 @@ async function submitJobOnce(job: DownloadJob) {
 
   const feedItem = getFeedItem(job.feedItemId);
   const metadata = getMetadataForFeedItem(job.feedItemId);
-  if (feedItem && metadata) {
+  if (feedItem && metadata && !job.forceDownload) {
     const preferredFeedItemId = getPreferredFeedItemIdForRelease(
       subscription.id,
       metadata
@@ -559,6 +575,40 @@ async function submitJobOnce(job: DownloadJob) {
         errorMessage: decision.reasons.join("; ")
       });
       return;
+    }
+  }
+
+  // Pre-flight library check: retry must not re-download an episode that is
+  // already in the library unless the revision policy would replace it.
+  const settings = getSystemSettings();
+  if (metadata?.episodeNumber != null) {
+    const libraryEpisode = getLibraryEpisodeState(
+      subscription.id,
+      metadata.episodeNumber
+    );
+    if (libraryEpisode) {
+      const claimedRevision = resolveClaimedRevision({
+        jobMetadataRevision: metadata.releaseRevision
+      });
+      const overwriteDecision = canOverwriteLibraryFile({
+        claimedRevision,
+        existingRevision: libraryEpisode.knownRevision,
+        replaceExistingOnRevision: settings.replaceExistingOnRevision,
+        libraryFileExists: true
+      });
+      if (!overwriteDecision.allow) {
+        updateJobStatus(job.id, "failed", {
+          errorMessage: contextualError(
+            "Library episode already exists",
+            overwriteDecision.reason,
+            { episodeNumber: metadata.episodeNumber, path: libraryEpisode.path }
+          )
+        });
+        console.log(
+          `[pipeline] job#${job.id} blocked: ${overwriteDecision.reason}`
+        );
+        return;
+      }
     }
   }
 
@@ -738,14 +788,25 @@ export async function scanAndRenameIncoming() {
 }
 
 async function scanJobTarget(job: DownloadJob) {
-  const targetPath = incomingPathForJob(job.id);
-  if (joinRemotePath(job.targetPath ?? "") !== targetPath) {
+  // The job's own directory is authoritative: scan where the download actually
+  // landed (stored target_path), so changing openlistIncomingPath mid-flight
+  // does not kill in-flight jobs. Only legacy shared/foreign directories fail.
+  const targetPath = joinRemotePath(job.targetPath ?? "");
+  const expectedJobDir = `/jobs/${job.id}`;
+  if (
+    targetPath === "/" ||
+    !targetPath.endsWith(expectedJobDir) ||
+    targetPath.length <= expectedJobDir.length
+  ) {
     updateJobStatus(job.id, "failed", {
       targetPath: job.targetPath,
       errorMessage: contextualError(
         "Cannot scan legacy shared download directory",
         "This job must be cleaned in OpenList and manually resubmitted",
-        { targetPath: job.targetPath, expectedTargetPath: targetPath }
+        {
+          targetPath: job.targetPath,
+          expectedTargetPath: incomingPathForJob(job.id)
+        }
       )
     });
     return;
@@ -781,7 +842,7 @@ async function scanJobTarget(job: DownloadJob) {
     updateJobStatus(job.id, "failed", {
       errorMessage: contextualError(
         "Downloaded file validation failed",
-        `Multiple media files found; expected exactly one for episode ${metadata.episodeNumber}`,
+        `Multiple media files found; expected exactly one for episode ${metadata.episodeNumber}. This is likely a batch, multi-part, or sample-containing release — organize it manually in OpenList`,
         {
           targetPath,
           files: files.map((file) => file.name).join(", ")
@@ -792,6 +853,16 @@ async function scanJobTarget(job: DownloadJob) {
   }
 
   const file = files[0];
+  if (EPISODE_RANGE_RE.test(file.name)) {
+    updateJobStatus(job.id, "failed", {
+      errorMessage: contextualError(
+        "Downloaded file validation failed",
+        "Filename contains an episode range; this is a batch or multi-part release — organize it manually in OpenList",
+        { targetPath, file: file.name }
+      )
+    });
+    return;
+  }
   const parsed = parseReleaseTitle(file.name);
   const episode =
     parsed.episodeNumber ??
@@ -870,7 +941,7 @@ async function organizeJobFile(
     claimedRevision,
     highestKnownRevision: highestKnown
   });
-  if (!importDecision.allow) {
+  if (!job.forceDownload && !importDecision.allow) {
     updateJobStatus(job.id, "failed", {
       targetPath: file.path,
       errorMessage: contextualError(
@@ -886,7 +957,7 @@ async function organizeJobFile(
   }
 
   // Preferred feed item may have moved on while this file was still downloading.
-  if (effectiveMetadata) {
+  if (!job.forceDownload && effectiveMetadata) {
     const preferredFeedItemId = getPreferredFeedItemIdForRelease(
       subscription.id,
       effectiveMetadata
@@ -1118,6 +1189,8 @@ function supersedeSiblingRevisionJobs(
 function markSupersededJob(feedItemId: number) {
   const job = getJobForItem(feedItemId);
   if (!job) return;
+  // User-forced downloads are exempt from revision supersede handling.
+  if (job.forceDownload) return;
 
   if (["discovered", "queued", "needs_review"].includes(job.status)) {
     updateJobStatus(job.id, "skipped", {

@@ -1,6 +1,7 @@
 import { CheckCircle2, RotateCcw } from "lucide-react";
 import {
   confirmJobAction,
+  forceConfirmJobAction,
   retryJobAction
 } from "@/app/actions";
 import { Button } from "@/components/ui/button";
@@ -102,6 +103,19 @@ export function JobTable({ jobs }: { jobs: DashboardData["jobs"] }) {
                             variant="ghost"
                             aria-label="确认下载"
                             title="确认并提交下载"
+                          >
+                            <CheckCircle2 className="size-4" />
+                          </Button>
+                        </form>
+                      ) : null}
+                      {job.status === "skipped" ? (
+                        <form action={forceConfirmJobAction}>
+                          <input type="hidden" name="id" value={job.id} />
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            aria-label="强制下载"
+                            title="该发布已被更高版本取代；强制忽略版本策略下载并整理"
                           >
                             <CheckCircle2 className="size-4" />
                           </Button>

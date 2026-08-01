@@ -417,7 +417,7 @@ function statusSql(status: EpisodeStatusFilter) {
     return `(file_status = 'failed' OR job_status = 'failed')`;
   }
   if (status === "waiting") {
-    return `job_status = 'needs_review'`;
+    return `job_status IN ('needs_review', 'discovered')`;
   }
   // active
   return `job_status IN ('queued', 'downloading', 'ready_to_rename')`;

@@ -274,6 +274,12 @@ export async function confirmJobAction(formData: FormData) {
   revalidatePath("/");
 }
 
+export async function forceConfirmJobAction(formData: FormData) {
+  const id = Number(formData.get("id"));
+  if (Number.isFinite(id)) await confirmJob(id, { force: true });
+  revalidatePath("/");
+}
+
 export async function manualSupplementEpisodeAction(formData: FormData) {
   const parsed = manualEpisodeSchema.parse({
     subscriptionId: formData.get("subscriptionId"),
