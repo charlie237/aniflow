@@ -15,7 +15,8 @@ const {
   failWorkerTask,
   getWorkerTask,
   refreshWorkerLease,
-  releaseWorkerLease
+  releaseWorkerLease,
+  updateWorkerTaskProgress
 } = await import("@/lib/db/repositories");
 const { processWorkerTaskQueue } = await import("@/lib/worker/tasks");
 
@@ -69,6 +70,29 @@ describe("worker fail-stop and lease", () => {
     expect(getWorkerTask(task.id)).toMatchObject({
       status: "failed",
       errorMessage: "Worker task timed out; trigger it again manually"
+    });
+  });
+
+  it("persists the running phase and refreshes task activity", () => {
+    const task = enqueueWorkerTask({ type: "poll_all" });
+    if (!task) return;
+    getSqlite()
+      .prepare("UPDATE worker_tasks SET status = 'running' WHERE id = ?")
+      .run(task.id);
+
+    updateWorkerTaskProgress(task.id, {
+      phase: "fetching_rss",
+      detail: "Example subscription",
+      current: 2,
+      total: 4
+    });
+
+    expect(getWorkerTask(task.id)).toMatchObject({
+      status: "running",
+      phase: "fetching_rss",
+      phaseDetail: "Example subscription",
+      progressCurrent: 2,
+      progressTotal: 4
     });
   });
 

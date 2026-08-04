@@ -7,7 +7,8 @@
 export type { DashboardQueryInput } from "@/lib/db/repositories/dashboard-repository";
 export {
   getDashboardData,
-  getDashboardEpisodePage
+  getDashboardEpisodePage,
+  getDashboardWorkerTaskPage
 } from "@/lib/db/repositories/dashboard-repository";
 
 export {
@@ -85,7 +86,8 @@ export {
   enqueueWorkerTask,
   failStaleWorkerTasks,
   failWorkerTask,
+  getWorkerTaskPage,
   getWorkerTask,
-  listWorkerTasks,
-  listWorkerTasksByStatus
+  listWorkerTasksByStatus,
+  updateWorkerTaskProgress
 } from "@/lib/db/repositories/worker-task-repository";

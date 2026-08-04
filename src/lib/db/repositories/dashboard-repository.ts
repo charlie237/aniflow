@@ -7,7 +7,8 @@ import type {
   DashboardEpisodePage,
   EpisodeStatusFilter,
   Subscription,
-  SubscriptionStateFilter
+  SubscriptionStateFilter,
+  WorkerTaskCategory
 } from "@/lib/db/types";
 import {
   listRules,
@@ -15,7 +16,7 @@ import {
 } from "@/lib/db/repositories/subscription-repository";
 import { getWorkerHealth } from "@/lib/db/repositories/system-settings-repository";
 import {
-  listWorkerTasks,
+  getWorkerTaskPage,
   listWorkerTasksByStatus
 } from "@/lib/db/repositories/worker-task-repository";
 
@@ -26,6 +27,9 @@ export interface DashboardQueryInput {
   episodeStatus?: string;
   episodePage?: string;
   episodePageSize?: string;
+  workerTaskCategory?: string;
+  workerTaskPage?: string;
+  workerTaskPageSize?: string;
 }
 
 export function getDashboardData(input: DashboardQueryInput = {}): DashboardData {
@@ -40,12 +44,20 @@ export function getDashboardData(input: DashboardQueryInput = {}): DashboardData
     rssItems: [],
     feedItems: [],
     jobs: [],
-    workerTasks: listWorkerTasks(),
+    workerTaskPage: getDashboardWorkerTaskPage(input),
     episodeFiles: [],
     episodePage,
     workerHealth: getWorkerHealth(),
     stats
   };
+}
+
+export function getDashboardWorkerTaskPage(input: DashboardQueryInput = {}) {
+  return getWorkerTaskPage({
+    category: normalizeWorkerTaskCategory(input.workerTaskCategory),
+    page: Math.max(1, Number(input.workerTaskPage) || 1),
+    pageSize: normalizeWorkerTaskPageSize(input.workerTaskPageSize)
+  });
 }
 
 export function getDashboardEpisodePage(
@@ -86,6 +98,21 @@ function normalizeEpisodeStatus(value: string | undefined): EpisodeStatusFilter 
 function normalizeEpisodePageSize(value: string | undefined) {
   const number = Number(value);
   return [10, 20, 50].includes(number) ? number : 20;
+}
+
+function normalizeWorkerTaskCategory(
+  value: string | undefined
+): "all" | WorkerTaskCategory {
+  return ["active", "attention", "action", "routine", "other"].includes(
+    value ?? ""
+  )
+    ? (value as WorkerTaskCategory)
+    : "all";
+}
+
+function normalizeWorkerTaskPageSize(value: string | undefined) {
+  const number = Number(value);
+  return [10, 20, 50].includes(number) ? number : 10;
 }
 
 function getDashboardStats(

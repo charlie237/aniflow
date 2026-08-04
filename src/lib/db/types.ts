@@ -27,6 +27,22 @@ export type WorkerTaskType =
 
 export type WorkerTaskStatus = "queued" | "running" | "completed" | "failed";
 
+export type WorkerTaskCategory =
+  | "active"
+  | "attention"
+  | "action"
+  | "routine"
+  | "other";
+
+export type WorkerTaskPhase =
+  | "starting"
+  | "syncing_library"
+  | "fetching_rss"
+  | "processing_feed"
+  | "scanning_files"
+  | "checking_downloads"
+  | "submitting_downloads";
+
 export type EpisodeStatusFilter =
   | "all"
   | "active"
@@ -127,9 +143,15 @@ export interface EpisodeFile {
 
 export interface WorkerTask {
   id: number;
+  /** Query-time fold group assigned by the dashboard; absent outside that view. */
+  displayGroupId?: number;
   type: WorkerTaskType;
   subscriptionId: number | null;
   status: WorkerTaskStatus;
+  phase: WorkerTaskPhase | null;
+  phaseDetail: string | null;
+  progressCurrent: number | null;
+  progressTotal: number | null;
   payloadJson: string;
   errorMessage: string | null;
   attempts: number;
@@ -137,6 +159,21 @@ export interface WorkerTask {
   startedAt: string | null;
   finishedAt: string | null;
   updatedAt: string;
+}
+
+export interface DashboardWorkerTaskPage {
+  rows: WorkerTask[];
+  /** Number of folded display groups matching the current category. */
+  total: number;
+  /** Number of raw task executions represented by those groups. */
+  taskTotal: number;
+  page: number;
+  pageSize: number;
+  pageCount: number;
+  filters: {
+    category: "all" | WorkerTaskCategory;
+  };
+  counts: Record<"all" | WorkerTaskCategory, number>;
 }
 
 export interface WorkerHealth {
@@ -231,7 +268,7 @@ export interface DashboardData {
       metadata: ReleaseMetadata | null;
     }
   >;
-  workerTasks: WorkerTask[];
+  workerTaskPage: DashboardWorkerTaskPage;
   episodeFiles: EpisodeFile[];
   episodePage: DashboardEpisodePage;
   workerHealth: WorkerHealth;

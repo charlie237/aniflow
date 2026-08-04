@@ -140,6 +140,10 @@ function bootstrapSchema(database: Database.Database) {
       type TEXT NOT NULL,
       subscription_id INTEGER REFERENCES subscriptions(id) ON DELETE SET NULL,
       status TEXT NOT NULL DEFAULT 'queued',
+      phase TEXT,
+      phase_detail TEXT,
+      progress_current INTEGER,
+      progress_total INTEGER,
       payload_json TEXT NOT NULL DEFAULT '{}',
       error_message TEXT,
       attempts INTEGER NOT NULL DEFAULT 0,
@@ -171,6 +175,10 @@ function bootstrapSchema(database: Database.Database) {
     "force_download",
     "INTEGER NOT NULL DEFAULT 0"
   );
+  ensureColumn(database, "worker_tasks", "phase", "TEXT");
+  ensureColumn(database, "worker_tasks", "phase_detail", "TEXT");
+  ensureColumn(database, "worker_tasks", "progress_current", "INTEGER");
+  ensureColumn(database, "worker_tasks", "progress_total", "INTEGER");
   ensureColumn(
     database,
     "download_jobs",

@@ -136,7 +136,7 @@ export default async function HomePage({
         <WorkerHealthNotice health={data.workerHealth} t={t} />
         <EpisodeTable pageData={data.episodePage} />
         <WorkerTaskTable
-          tasks={data.workerTasks}
+          pageData={data.workerTaskPage}
           subscriptions={data.subscriptions}
         />
       </div>
@@ -153,7 +153,10 @@ function toDashboardQuery(
     episodeSeason: firstParam(params.episodeSeason),
     episodeStatus: firstParam(params.episodeStatus),
     episodePage: firstParam(params.episodePage),
-    episodePageSize: firstParam(params.episodePageSize)
+    episodePageSize: firstParam(params.episodePageSize),
+    workerTaskCategory: firstParam(params.workerTaskCategory),
+    workerTaskPage: firstParam(params.workerTaskPage),
+    workerTaskPageSize: firstParam(params.workerTaskPageSize)
   };
 }
 

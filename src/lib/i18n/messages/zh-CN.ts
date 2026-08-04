@@ -100,22 +100,49 @@ const zhCN = {
   },
   workerTask: {
     title: "后台队列",
-    description: "媒体库同步、RSS 轮询和文件整理会先进入队列。",
+    description: "分别查看任务的执行状态、当前阶段和本轮结果；连续且结果相同的常规轮询会自动折叠。",
     empty: "暂无后台任务。",
-    colStatus: "状态",
-    colTask: "任务",
+    filteredEmpty: "这个分类下暂无后台任务。",
+    paginationTotal: "共 {rows} 行 · {tasks} 次任务",
+    pageSummary: "本页 {tasks} 次 · {rows} 行",
+    colStatus: "执行状态",
+    colTask: "任务与结果",
     colAttempts: "次数",
     colUpdated: "更新",
     colDetails: "详情",
     viewDetails: "查看后台任务详情",
     taskTitle: "后台任务 #{id}",
     labelStatus: "状态",
+    labelOutcome: "本轮结论",
+    labelResult: "本轮结果",
+    labelPhase: "当前阶段",
+    labelProgress: "处理对象",
     labelAttempts: "尝试次数",
     labelCreated: "创建",
     labelStarted: "开始",
     labelFinished: "结束",
     labelUpdated: "更新",
     labelError: "错误",
+    labelPayload: "原始数据",
+    completedShort: "完成",
+    waitingForWorker: "等待 Worker 接手",
+    failedAt: "停在：{phase}",
+    routineRuns: "常规轮询 ×{count}",
+    routineSummary: "没有入队下载，也没有失败",
+    routineResult: "读取 {fetched} · 匹配 {discovered} · 跳过 {skipped}",
+    taskSummary: "读取 {fetched} · 匹配 {discovered}",
+    taskResult: "读取 {fetched} · 匹配 {discovered} · 入队 {queued} · 失败 {failed}",
+    routineRange: "{start} 至 {end}",
+    expandRoutine: "展开 {count} 次常规轮询",
+    collapseRoutine: "收起 {count} 次常规轮询",
+    categories: {
+      all: "全部",
+      active: "进行中",
+      attention: "需关注",
+      action: "有变更",
+      routine: "常规",
+      other: "其他"
+    },
     types: {
       poll_all: "全部同步并轮询",
       poll_subscription: "订阅同步并轮询",
@@ -124,10 +151,25 @@ const zhCN = {
       submit_queued: "提交下载"
     },
     statuses: {
-      queued: "排队中",
-      running: "运行中",
-      completed: "已完成",
-      failed: "失败"
+      queued: "等待执行",
+      running: "执行中",
+      completed: "本轮结束",
+      failed: "执行失败"
+    },
+    phases: {
+      starting: "准备执行",
+      syncing_library: "同步媒体库",
+      fetching_rss: "拉取 RSS",
+      processing_feed: "处理发布",
+      scanning_files: "扫描并整理文件",
+      checking_downloads: "核对下载状态",
+      submitting_downloads: "提交下载"
+    },
+    outcomes: {
+      noChange: "无变化",
+      attention: "需关注",
+      queued: "新入队 {count} 个",
+      changed: "已处理"
     }
   },
   episode: {

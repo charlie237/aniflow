@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import type {
   DownloadJob,
   ReleaseMetadata,
-  Subscription
+  Subscription,
+  WorkerTaskPhase
 } from "@/lib/db/types";
 import {
   acquireWorkerLease,
@@ -82,13 +83,26 @@ export interface PipelineResult {
   failed: number;
 }
 
+export interface WorkerTaskProgress {
+  phase: WorkerTaskPhase;
+  detail?: string | null;
+  current?: number | null;
+  total?: number | null;
+}
+
+export type WorkerTaskProgressReporter = (
+  progress: WorkerTaskProgress
+) => void;
+
 const INCOMING_MUTATION_LEASE = "incoming-mutation";
 const INCOMING_MUTATION_LEASE_SECONDS = 2 * 60 * 60;
 
 /** Episode ranges like "01-13" / "01~13" in a single filename: batch releases. */
 const EPISODE_RANGE_RE = /\b\d{1,3}\s*[-~～至]\s*\d{1,3}\b/;
 
-export async function pollAllSubscriptions() {
+export async function pollAllSubscriptions(
+  reportProgress?: WorkerTaskProgressReporter
+) {
   const totals: PipelineResult = {
     fetched: 0,
     discovered: 0,
@@ -97,17 +111,35 @@ export async function pollAllSubscriptions() {
     failed: 0
   };
   const errors: string[] = [];
+  let lastProgress: WorkerTaskProgress | null = null;
+  let failedProgress: WorkerTaskProgress | null = null;
+  const report = (progress: WorkerTaskProgress) => {
+    lastProgress = progress;
+    reportProgress?.(progress);
+  };
 
-  for (const subscription of listEnabledSubscriptions()) {
+  const subscriptions = listEnabledSubscriptions();
+  for (const [index, subscription] of subscriptions.entries()) {
+    const progress = {
+      detail: subscription.name,
+      current: index + 1,
+      total: subscriptions.length
+    };
     try {
+      report({ phase: "syncing_library", ...progress });
       await syncSubscriptionLibrary(subscription.id);
-      const result = await pollSubscriptionFeed(subscription.id);
+      report({ phase: "fetching_rss", ...progress });
+      const result = await pollSubscriptionFeed(subscription.id, {
+        reportProgress: report,
+        ...progress
+      });
       totals.fetched += result.fetched;
       totals.discovered += result.discovered;
       totals.queued += result.queued;
       totals.skipped += result.skipped;
       totals.failed += result.failed;
     } catch (error) {
+      failedProgress ??= lastProgress;
       totals.failed += 1;
       const message = contextualError("Subscription poll failed", error, {
         subscriptionId: subscription.id,
@@ -118,8 +150,9 @@ export async function pollAllSubscriptions() {
     }
   }
 
-  await runDownloadMaintenance();
+  await runDownloadMaintenance(report);
   if (errors.length > 0) {
+    if (failedProgress) reportProgress?.(failedProgress);
     throw new Error(errors.join("\n"));
   }
   return totals;
@@ -156,19 +189,57 @@ export async function refreshSubscriptionFeedCache(subscriptionId: number) {
   };
 }
 
-export async function pollSubscription(subscriptionId: number): Promise<PipelineResult> {
+export async function pollSubscription(
+  subscriptionId: number,
+  reportProgress?: WorkerTaskProgressReporter
+): Promise<PipelineResult> {
+  let lastProgress: WorkerTaskProgress | null = null;
+  let failedProgress: WorkerTaskProgress | null = null;
+  const report = (progress: WorkerTaskProgress) => {
+    lastProgress = progress;
+    reportProgress?.(progress);
+  };
   try {
     const subscription = getSubscription(subscriptionId);
     if (subscription?.enabled) {
+      report({
+        phase: "syncing_library",
+        detail: subscription.name,
+        current: 1,
+        total: 1
+      });
       await syncSubscriptionLibrary(subscriptionId);
     }
-    return await pollSubscriptionFeed(subscriptionId);
+    report({
+      phase: "fetching_rss",
+      detail: subscription?.name ?? null,
+      current: 1,
+      total: 1
+    });
+    return await pollSubscriptionFeed(subscriptionId, {
+      reportProgress: report,
+      detail: subscription?.name ?? null,
+      current: 1,
+      total: 1
+    });
+  } catch (error) {
+    failedProgress = lastProgress;
+    throw error;
   } finally {
-    await runDownloadMaintenance();
+    await runDownloadMaintenance(report);
+    if (failedProgress) reportProgress?.(failedProgress);
   }
 }
 
-async function pollSubscriptionFeed(subscriptionId: number): Promise<PipelineResult> {
+async function pollSubscriptionFeed(
+  subscriptionId: number,
+  progress?: {
+    reportProgress?: WorkerTaskProgressReporter;
+    detail?: string | null;
+    current?: number | null;
+    total?: number | null;
+  }
+): Promise<PipelineResult> {
   const subscription = getSubscription(subscriptionId);
   if (!subscription) throw new Error(`Subscription ${subscriptionId} not found`);
 
@@ -191,6 +262,13 @@ async function pollSubscriptionFeed(subscriptionId: number): Promise<PipelineRes
   if (!response.ok) {
     throw new Error(`RSS fetch failed (${response.status}) for ${subscription.name}`);
   }
+
+  progress?.reportProgress?.({
+    phase: "processing_feed",
+    detail: progress.detail ?? subscription.name,
+    current: progress.current ?? null,
+    total: progress.total ?? null
+  });
 
   const items = parseRss(response.body);
   result.fetched = items.length;
@@ -359,7 +437,9 @@ async function pollSubscriptionFeed(subscriptionId: number): Promise<PipelineRes
 }
 
 /** Keep download lifecycle work independent from RSS polling success. */
-export async function runDownloadMaintenance() {
+export async function runDownloadMaintenance(
+  reportProgress?: WorkerTaskProgressReporter
+) {
   const migrated = migrateLegacyDownloadJobsToFailed();
   if (migrated > 0) {
     console.log(
@@ -367,8 +447,11 @@ export async function runDownloadMaintenance() {
     );
   }
   // A file already present in the job-owned directory is the strongest completion signal.
+  reportProgress?.({ phase: "scanning_files" });
   await scanAndRenameIncoming();
+  reportProgress?.({ phase: "checking_downloads" });
   await reconcileDownloadingJobs();
+  reportProgress?.({ phase: "submitting_downloads" });
   await submitQueuedJobs();
 }
 

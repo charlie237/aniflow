@@ -105,22 +105,49 @@ const en = {
   workerTask: {
     title: "Worker queue",
     description:
-      "Library sync, RSS polling, and file organization are queued first.",
+      "See execution state, current phase, and the outcome of each run; consecutive routine polls with identical results are folded automatically.",
     empty: "No worker tasks.",
-    colStatus: "Status",
-    colTask: "Task",
+    filteredEmpty: "No worker tasks in this category.",
+    paginationTotal: "{rows} rows · {tasks} task runs",
+    pageSummary: "{tasks} runs on this page · {rows} rows",
+    colStatus: "Execution",
+    colTask: "Task & outcome",
     colAttempts: "Attempts",
     colUpdated: "Updated",
     colDetails: "Details",
     viewDetails: "View worker task details",
     taskTitle: "Worker task #{id}",
     labelStatus: "Status",
+    labelOutcome: "Outcome",
+    labelResult: "Run result",
+    labelPhase: "Current phase",
+    labelProgress: "Processing",
     labelAttempts: "Attempts",
     labelCreated: "Created",
     labelStarted: "Started",
     labelFinished: "Finished",
     labelUpdated: "Updated",
     labelError: "Error",
+    labelPayload: "Payload",
+    completedShort: "Done",
+    waitingForWorker: "Waiting for worker",
+    failedAt: "Stopped at: {phase}",
+    routineRuns: "Routine polls ×{count}",
+    routineSummary: "No downloads queued and no failures",
+    routineResult: "Fetched {fetched} · matched {discovered} · skipped {skipped}",
+    taskSummary: "Fetched {fetched} · matched {discovered}",
+    taskResult: "Fetched {fetched} · matched {discovered} · queued {queued} · failed {failed}",
+    routineRange: "{start} to {end}",
+    expandRoutine: "Expand {count} routine polls",
+    collapseRoutine: "Collapse {count} routine polls",
+    categories: {
+      all: "All",
+      active: "Active",
+      attention: "Needs attention",
+      action: "Changed",
+      routine: "Routine",
+      other: "Other"
+    },
     types: {
       poll_all: "Sync & poll all",
       poll_subscription: "Sync & poll subscription",
@@ -129,10 +156,25 @@ const en = {
       submit_queued: "Submit download"
     },
     statuses: {
-      queued: "Queued",
+      queued: "Waiting",
       running: "Running",
-      completed: "Completed",
-      failed: "Failed"
+      completed: "Run finished",
+      failed: "Run failed"
+    },
+    phases: {
+      starting: "Preparing",
+      syncing_library: "Syncing library",
+      fetching_rss: "Fetching RSS",
+      processing_feed: "Processing releases",
+      scanning_files: "Scanning & organizing files",
+      checking_downloads: "Checking downloads",
+      submitting_downloads: "Submitting downloads"
+    },
+    outcomes: {
+      noChange: "No changes",
+      attention: "Needs attention",
+      queued: "{count} newly queued",
+      changed: "Processed"
     }
   },
   episode: {

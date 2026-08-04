@@ -182,6 +182,10 @@ export const workerTasks = sqliteTable(
       onDelete: "set null"
     }),
     status: text("status").notNull().default("queued"),
+    phase: text("phase"),
+    phaseDetail: text("phase_detail"),
+    progressCurrent: integer("progress_current"),
+    progressTotal: integer("progress_total"),
     payloadJson: text("payload_json").notNull().default("{}"),
     errorMessage: text("error_message"),
     attempts: integer("attempts").notNull().default(0),

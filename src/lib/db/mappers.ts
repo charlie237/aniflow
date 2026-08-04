@@ -116,6 +116,12 @@ export function mapWorkerTask(row: Record<string, unknown>): WorkerTask {
     type: pick(row, "type") as WorkerTask["type"],
     subscriptionId: nullableNumber(pick(row, "subscriptionId", "subscription_id")),
     status: pick(row, "status") as WorkerTask["status"],
+    phase: nullableString(pick(row, "phase")) as WorkerTask["phase"],
+    phaseDetail: nullableString(pick(row, "phaseDetail", "phase_detail")),
+    progressCurrent: nullableNumber(
+      pick(row, "progressCurrent", "progress_current")
+    ),
+    progressTotal: nullableNumber(pick(row, "progressTotal", "progress_total")),
     payloadJson: String(pick(row, "payloadJson", "payload_json") ?? "{}"),
     errorMessage: nullableString(pick(row, "errorMessage", "error_message")),
     attempts: Number(pick(row, "attempts") ?? 0),

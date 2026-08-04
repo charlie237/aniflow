@@ -2,7 +2,8 @@ import {
   claimNextWorkerTask,
   completeWorkerTask,
   failStaleWorkerTasks,
-  failWorkerTask
+  failWorkerTask,
+  updateWorkerTaskProgress
 } from "@/lib/db/repositories";
 import type { WorkerTask } from "@/lib/db/types";
 import {
@@ -65,15 +66,22 @@ export async function processWorkerTaskQueue(maxTasks = 20) {
 async function runWorkerTask(
   task: WorkerTask
 ): Promise<Record<string, unknown> | void> {
+  const reportProgress = (
+    progress: Parameters<typeof updateWorkerTaskProgress>[1]
+  ) => updateWorkerTaskProgress(task.id, progress);
+
   switch (task.type) {
     case "poll_all":
-      return (await pollAllSubscriptions()) as unknown as Record<string, unknown>;
+      return (await pollAllSubscriptions(
+        reportProgress
+      )) as unknown as Record<string, unknown>;
     case "poll_subscription":
       if (!task.subscriptionId) {
         throw new Error("Missing subscription id for poll task");
       }
       return (await pollSubscription(
-        task.subscriptionId
+        task.subscriptionId,
+        reportProgress
       )) as unknown as Record<string, unknown>;
     case "cleanup_subscription_incoming":
       return {
@@ -81,11 +89,13 @@ async function runWorkerTask(
         reason: "Automatic incoming cleanup is disabled; clean OpenList manually"
       };
     case "scan_incoming":
+      reportProgress({ phase: "scanning_files" });
       await scanAndRenameIncoming();
+      reportProgress({ phase: "checking_downloads" });
       await reconcileDownloadingJobs();
       return { ok: true, action: "scan_incoming" };
     case "submit_queued":
-      await runDownloadMaintenance();
+      await runDownloadMaintenance(reportProgress);
       return { ok: true, action: "submit_queued" };
   }
 }

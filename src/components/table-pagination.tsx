@@ -9,6 +9,8 @@ export function TablePagination({
   pageCount,
   pageSize,
   total,
+  totalLabel,
+  summary,
   onPageChange,
   onPageSizeChange
 }: {
@@ -16,6 +18,8 @@ export function TablePagination({
   pageCount: number;
   pageSize: number;
   total: number;
+  totalLabel?: string;
+  summary?: string;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
 }) {
@@ -25,7 +29,10 @@ export function TablePagination({
   return (
     <div className="flex flex-col gap-2 border-t border-[var(--line)] pt-3 text-xs text-[var(--muted)] sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-center gap-2">
-        <span className="data-digits">{t("common.totalItems", { total })}</span>
+        <span className="data-digits">
+          {totalLabel ?? t("common.totalItems", { total })}
+        </span>
+        {summary ? <span>{summary}</span> : null}
         <select
           value={pageSize}
           onChange={(event) => onPageSizeChange(Number(event.target.value))}

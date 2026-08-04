@@ -11,9 +11,12 @@ process.env.DATABASE_PATH = dbPath;
 const { getSqlite } = await import("@/lib/db/client");
 const {
   addRule,
+  completeWorkerTask,
   createOrUpdateJob,
   createSubscription,
+  enqueueWorkerTask,
   getDashboardEpisodePage,
+  getDashboardWorkerTaskPage,
   getLibraryEpisodeState,
   syncLibraryEpisodeInventory,
   upsertFeedItem
@@ -184,6 +187,57 @@ describe("dashboard SQL pagination", () => {
     expect(page1.pageCount).toBe(1);
     expect(page1.rows).toHaveLength(5);
     expect(page1.total).toBe(5);
+  });
+
+  it("paginates and categorizes worker tasks in SQL", () => {
+    for (let index = 0; index < 25; index += 1) {
+      const task = enqueueWorkerTask({ type: "poll_all" });
+      expect(task).toBeTruthy();
+      if (!task) return;
+      completeWorkerTask(task.id, {
+        fetched: 100,
+        discovered: 10,
+        queued: index % 2 === 0 ? 1 : 0,
+        skipped: index % 2 === 0 ? 99 : 100,
+        failed: 0
+      });
+    }
+
+    const secondPage = getDashboardWorkerTaskPage({
+      workerTaskPage: "2",
+      workerTaskPageSize: "10"
+    });
+    expect(secondPage).toMatchObject({
+      total: 25,
+      taskTotal: 25,
+      page: 2,
+      pageSize: 10,
+      pageCount: 3,
+      counts: {
+        all: 25,
+        action: 13,
+        routine: 12,
+        active: 0,
+        attention: 0,
+        other: 0
+      }
+    });
+    expect(secondPage.rows).toHaveLength(10);
+
+    const routinePage = getDashboardWorkerTaskPage({
+      workerTaskCategory: "routine",
+      workerTaskPage: "2",
+      workerTaskPageSize: "10"
+    });
+    expect(routinePage).toMatchObject({
+      total: 12,
+      taskTotal: 12,
+      page: 2,
+      pageSize: 10,
+      pageCount: 2,
+      filters: { category: "routine" }
+    });
+    expect(routinePage.rows).toHaveLength(2);
   });
 
   it("shows scanned library episodes without RSS and merges RSS later", () => {
