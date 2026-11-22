@@ -13,7 +13,12 @@ import {
   recordAuthFailure
 } from "@/lib/rate-limit";
 
-const PUBLIC_PATHS = new Set(["/login", "/favicon.ico", "/favicon.svg"]);
+const PUBLIC_PATHS = new Set([
+  "/login",
+  "/favicon.ico",
+  "/favicon.svg",
+  "/api/health"
+]);
 
 export async function proxy(request: NextRequest) {
   if (!isAuthEnabledFromEnv()) {
