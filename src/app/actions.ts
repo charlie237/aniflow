@@ -70,8 +70,26 @@ const ruleSchema = z.object({
   value: z.string().min(1)
 });
 
+const optionalHttpUrlSchema = z
+  .string()
+  .trim()
+  .optional()
+  .default("")
+  .refine(isEmptyOrHttpUrl, {
+    message: "Must be a valid http:// or https:// URL"
+  });
+
+const optionalProxyUrlSchema = z
+  .string()
+  .trim()
+  .optional()
+  .default("http://127.0.0.1:7890")
+  .refine(isEmptyOrValidProxyUrl, {
+    message: "Proxy URL must be a valid http:// or https:// URL"
+  });
+
 const settingsSchema = z.object({
-  openlistBaseUrl: z.string().optional().default(""),
+  openlistBaseUrl: optionalHttpUrlSchema,
   openlistToken: z.string().optional().default(""),
   openlist115Mode: z.enum(["115 Cloud", "115 Open"]).default("115 Cloud"),
   openlistIncomingPath: z.string().optional().default("/115/Anime/_incoming"),
@@ -83,7 +101,7 @@ const settingsSchema = z.object({
     .default("{title} - S{season_pad}E{episode_pad}.{ext}"),
   replaceExistingOnRevision: z.boolean().default(true),
   proxyEnabled: z.boolean().default(false),
-  proxyUrl: z.string().optional().default("http://127.0.0.1:7890"),
+  proxyUrl: optionalProxyUrlSchema,
   tmdbBearerToken: z.string().optional().default(""),
   workerIntervalSeconds: z.coerce.number().int().min(30).max(86400),
   downloadTimeoutMinutes: z.coerce.number().int().min(1).max(24 * 60)
@@ -406,13 +424,26 @@ function enqueueAndKickWorkerTask(
 }
 
 function parseSettingsForm(formData: FormData): SystemSettings {
+  const existing = getSystemSettings();
   const incomingPath =
     formData.get("openlistIncomingPath")?.toString() ?? "/115/Anime/_incoming";
   const mediaLibraryRoot =
     formData.get("mediaLibraryRoot")?.toString() ?? "/115/Anime";
+  const submittedOpenlistToken = formData.get("openlistToken")?.toString().trim() ?? "";
+  const clearOpenlistToken = toBool(formData.get("clearOpenlistToken"));
+  const openlistToken = clearOpenlistToken
+    ? ""
+    : submittedOpenlistToken || existing.openlistToken;
+
+  const submittedTmdbToken = formData.get("tmdbBearerToken")?.toString().trim() ?? "";
+  const clearTmdbToken = toBool(formData.get("clearTmdbBearerToken"));
+  const tmdbBearerToken = clearTmdbToken
+    ? ""
+    : submittedTmdbToken || existing.tmdbBearerToken;
+
   const parsed = settingsSchema.parse({
     openlistBaseUrl: formData.get("openlistBaseUrl")?.toString() ?? "",
-    openlistToken: formData.get("openlistToken")?.toString() ?? "",
+    openlistToken,
     openlist115Mode: formData.get("openlist115Mode")?.toString() ?? "115 Cloud",
     openlistIncomingPath: incomingPath,
     mediaLibraryRoot: mediaLibraryRoot,
@@ -425,7 +456,7 @@ function parseSettingsForm(formData: FormData): SystemSettings {
     replaceExistingOnRevision: toBool(formData.get("replaceExistingOnRevision")),
     proxyEnabled: toBool(formData.get("proxyEnabled")),
     proxyUrl: formData.get("proxyUrl")?.toString() ?? "http://127.0.0.1:7890",
-    tmdbBearerToken: formData.get("tmdbBearerToken")?.toString() ?? "",
+    tmdbBearerToken,
     workerIntervalSeconds: formData.get("workerIntervalSeconds") ?? 300,
     downloadTimeoutMinutes: formData.get("downloadTimeoutMinutes") ?? 30
   }) satisfies SystemSettings;
@@ -521,6 +552,26 @@ function manualEpisodeTitle({
     .map((value) => `[${value}]`)
     .join("");
   return `${prefix}${subscriptionName} - ${episodeText}${revisionSuffix}${tags}`;
+}
+
+function isEmptyOrHttpUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isEmptyOrValidProxyUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `http://${trimmed}`;
+  return isEmptyOrHttpUrl(candidate);
 }
 
 function optionalFormString(value: FormDataEntryValue | null) {

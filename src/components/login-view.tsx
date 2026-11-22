@@ -72,7 +72,11 @@ export function LoginView({
               </div>
               {error ? (
                 <p className="text-sm text-[var(--danger-text)]">
-                  {error === "invalid" ? t("login.invalid") : t("login.failed")}
+                  {error === "invalid"
+                    ? t("login.invalid")
+                    : error === "rate_limited"
+                      ? t("login.rateLimited")
+                      : t("login.failed")}
                 </p>
               ) : null}
               <Button type="submit" className="w-full" variant="signal">

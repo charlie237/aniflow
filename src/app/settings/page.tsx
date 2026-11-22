@@ -1,6 +1,7 @@
 import { AppShell } from "@/components/app-shell";
 import { SettingsForm } from "@/components/settings-form";
 import { getSystemSettings } from "@/lib/db/repositories";
+import type { PublicSystemSettings } from "@/lib/db/types";
 import { getDictionary } from "@/lib/i18n/server";
 import type { OpenList115CheckResult } from "@/lib/openlist/client";
 
@@ -13,6 +14,12 @@ export default async function SettingsPage({
 }) {
   const { check, reset } = await searchParams;
   const { t } = await getDictionary();
+  const { openlistToken, tmdbBearerToken, ...rest } = getSystemSettings();
+  const publicSettings: PublicSystemSettings = {
+    ...rest,
+    hasOpenlistToken: Boolean(openlistToken),
+    hasTmdbBearerToken: Boolean(tmdbBearerToken)
+  };
   return (
     <AppShell>
       <div className="mx-auto grid w-full max-w-5xl gap-5 px-4 py-6 md:px-6">
@@ -25,7 +32,7 @@ export default async function SettingsPage({
           </p>
         </section>
         <SettingsForm
-          settings={getSystemSettings()}
+          settings={publicSettings}
           checkResult={parseCheckResult(check)}
           resetStatus={parseResetStatus(reset)}
         />

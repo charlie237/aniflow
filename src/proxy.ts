@@ -6,6 +6,12 @@ import {
   verifyPasswordEdge,
   verifySessionTokenEdge
 } from "@/lib/auth-edge";
+import {
+  checkAuthRateLimit,
+  clearAuthFailures,
+  extractClientKey,
+  recordAuthFailure
+} from "@/lib/rate-limit";
 
 const PUBLIC_PATHS = new Set(["/login", "/favicon.ico", "/favicon.svg"]);
 
@@ -28,14 +34,21 @@ export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (isPublicPath(pathname)) {
     // Already logged in users hitting /login go home.
-    if (pathname === "/login" && (await isAuthenticated(request))) {
+    if (pathname === "/login" && (await isAuthenticated(request)) === "ok") {
       return NextResponse.redirect(new URL("/", request.url));
     }
     return NextResponse.next();
   }
 
-  if (await isAuthenticated(request)) {
+  const authResult = await isAuthenticated(request);
+  if (authResult === "ok") {
     return NextResponse.next();
+  }
+  if (authResult === "rate_limited") {
+    return NextResponse.json(
+      { error: "Too many failed authentication attempts; try again later" },
+      { status: 429 }
+    );
   }
 
   if (pathname.startsWith("/api/")) {
@@ -47,30 +60,42 @@ export async function proxy(request: NextRequest) {
   return NextResponse.redirect(loginUrl);
 }
 
-async function isAuthenticated(request: NextRequest) {
+async function isAuthenticated(
+  request: NextRequest
+): Promise<"ok" | "unauthorized" | "rate_limited"> {
   const cookie = request.cookies.get(SESSION_COOKIE)?.value;
-  if (await verifySessionTokenEdge(cookie)) return true;
+  if (await verifySessionTokenEdge(cookie)) return "ok";
 
   const authorization = request.headers.get("authorization");
-  if (!authorization) return false;
+  if (!authorization) return "unauthorized";
 
-  if (authorization.startsWith("Bearer ")) {
-    const token = authorization.slice("Bearer ".length).trim();
-    return verifyPasswordEdge(token);
+  const clientKey = extractClientKey(request.headers);
+  if (!checkAuthRateLimit(clientKey).allowed) {
+    return "rate_limited";
   }
 
-  if (authorization.startsWith("Basic ")) {
+  let valid = false;
+  if (authorization.startsWith("Bearer ")) {
+    const token = authorization.slice("Bearer ".length).trim();
+    valid = await verifyPasswordEdge(token);
+  } else if (authorization.startsWith("Basic ")) {
     try {
       const decoded = atob(authorization.slice("Basic ".length).trim());
       const separator = decoded.indexOf(":");
       const password = separator >= 0 ? decoded.slice(separator + 1) : decoded;
-      return verifyPasswordEdge(password);
+      valid = await verifyPasswordEdge(password);
     } catch {
-      return false;
+      valid = false;
     }
   }
 
-  return false;
+  if (valid) {
+    clearAuthFailures(clientKey);
+    return "ok";
+  }
+
+  recordAuthFailure(clientKey);
+  return "unauthorized";
 }
 
 function isPublicPath(pathname: string) {

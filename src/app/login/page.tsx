@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import { loginAction } from "@/app/auth-actions";
 import { isAuthEnabled } from "@/lib/auth";
 import { LoginView } from "@/components/login-view";
 

@@ -242,6 +242,15 @@ export interface SystemSettings {
   downloadTimeoutMinutes: number;
 }
 
+/** Client-safe projection of SystemSettings without plaintext secret tokens. */
+export type PublicSystemSettings = Omit<
+  SystemSettings,
+  "openlistToken" | "tmdbBearerToken"
+> & {
+  hasOpenlistToken: boolean;
+  hasTmdbBearerToken: boolean;
+};
+
 export interface DashboardData {
   subscriptions: Subscription[];
   rules: FilterRule[];

@@ -6,6 +6,12 @@ import {
   verifyPasswordEdge,
   verifySessionTokenEdge
 } from "@/lib/auth-edge";
+import {
+  checkAuthRateLimit,
+  clearAuthFailures,
+  recordAuthFailure,
+  resetAllAuthRateLimits
+} from "@/lib/rate-limit";
 
 describe("auth-edge", () => {
   it("recognizes only loopback hostnames for passwordless access", () => {
@@ -62,5 +68,37 @@ describe("auth-edge", () => {
       if (previousSecret === undefined) delete process.env.AUTH_SECRET;
       else process.env.AUTH_SECRET = previousSecret;
     }
+  });
+
+  it("rate-limits repeated auth failures and clears after success or expiry", () => {
+    resetAllAuthRateLimits();
+    const t0 = 1_700_000_000_000;
+    const opts = { maxAttempts: 3, windowMs: 60_000, now: t0 };
+
+    expect(checkAuthRateLimit("10.0.0.1", opts).allowed).toBe(true);
+    recordAuthFailure("10.0.0.1", opts);
+    recordAuthFailure("10.0.0.1", opts);
+    expect(checkAuthRateLimit("10.0.0.1", opts).allowed).toBe(true);
+    recordAuthFailure("10.0.0.1", opts);
+
+    const blocked = checkAuthRateLimit("10.0.0.1", opts);
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.retryAfterSeconds).toBe(60);
+
+    // Other clients are unaffected.
+    expect(checkAuthRateLimit("10.0.0.2", opts).allowed).toBe(true);
+
+    // Expires after window.
+    expect(
+      checkAuthRateLimit("10.0.0.1", { ...opts, now: t0 + 60_001 }).allowed
+    ).toBe(true);
+
+    // Explicit clear works immediately.
+    recordAuthFailure("10.0.0.3", opts);
+    recordAuthFailure("10.0.0.3", opts);
+    recordAuthFailure("10.0.0.3", opts);
+    expect(checkAuthRateLimit("10.0.0.3", opts).allowed).toBe(false);
+    clearAuthFailures("10.0.0.3");
+    expect(checkAuthRateLimit("10.0.0.3", opts).allowed).toBe(true);
   });
 });

@@ -43,6 +43,7 @@ const en = {
     descriptionPrefix: "AUTH_PASSWORD is enabled. Enter the access password.",
     password: "Access password",
     invalid: "Incorrect password",
+    rateLimited: "Too many failed attempts. Please try again later.",
     failed: "Sign-in failed. Try again.",
     submit: "Open console"
   },
@@ -308,6 +309,8 @@ const en = {
       "Each 115 offline task uses an exclusive job directory before validation, rename, and library move.",
     baseUrl: "OpenList URL",
     token: "OpenList token",
+    tokenConfiguredPlaceholder: "Configured (leave blank to keep)",
+    clearToken: "Clear saved token",
     incomingPath: "Download directory (global root)",
     incomingHelp:
       "Global offline-download root. Every task exclusively uses root/jobs/job-id; the system never guesses ownership by filename or automatically deletes failed leftovers. Connectivity check syncs this root into OpenList backend config.",

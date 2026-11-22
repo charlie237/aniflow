@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { SystemSettings } from "@/lib/db/types";
+import type { PublicSystemSettings, SystemSettings } from "@/lib/db/types";
 import type { OpenList115CheckResult } from "@/lib/openlist/client";
 import { RUNTIME_RESET_CONFIRM_PHRASE } from "@/lib/runtime-reset";
 
@@ -27,7 +27,7 @@ export function SettingsForm({
   checkResult,
   resetStatus
 }: {
-  settings: SystemSettings;
+  settings: PublicSystemSettings;
   checkResult?: OpenList115CheckResult | null;
   resetStatus?: "runtime" | "confirm" | null;
 }) {
@@ -48,13 +48,26 @@ export function SettingsForm({
               defaultValue={settings.openlistBaseUrl}
               placeholder="http://127.0.0.1:5244"
             />
-            <Field
-              label={t("settings.token")}
-              name="openlistToken"
-              defaultValue={settings.openlistToken}
-              placeholder="Authorization token"
-              type="password"
-            />
+            <div className="grid gap-1.5">
+              <Field
+                label={t("settings.token")}
+                name="openlistToken"
+                defaultValue=""
+                placeholder={
+                  settings.hasOpenlistToken
+                    ? t("settings.tokenConfiguredPlaceholder")
+                    : "Authorization token"
+                }
+                type="password"
+                autoComplete="new-password"
+              />
+              {settings.hasOpenlistToken ? (
+                <label className="flex items-center gap-1.5 text-xs text-[var(--muted)]">
+                  <input type="checkbox" name="clearOpenlistToken" value="1" />
+                  {t("settings.clearToken")}
+                </label>
+              ) : null}
+            </div>
             <ModeSelect defaultValue={settings.openlist115Mode} />
             <Field
               label={t("settings.incomingPath")}
@@ -181,12 +194,26 @@ export function SettingsForm({
             <CardDescription>{t("settings.miscDescription")}</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-2">
-            <Field
-              label={t("settings.tmdbToken")}
-              name="tmdbBearerToken"
-              defaultValue={settings.tmdbBearerToken}
-              type="password"
-            />
+            <div className="grid gap-1.5">
+              <Field
+                label={t("settings.tmdbToken")}
+                name="tmdbBearerToken"
+                defaultValue=""
+                placeholder={
+                  settings.hasTmdbBearerToken
+                    ? t("settings.tokenConfiguredPlaceholder")
+                    : ""
+                }
+                type="password"
+                autoComplete="new-password"
+              />
+              {settings.hasTmdbBearerToken ? (
+                <label className="flex items-center gap-1.5 text-xs text-[var(--muted)]">
+                  <input type="checkbox" name="clearTmdbBearerToken" value="1" />
+                  {t("settings.clearToken")}
+                </label>
+              ) : null}
+            </div>
             <Field
               label={t("settings.workerInterval")}
               name="workerIntervalSeconds"

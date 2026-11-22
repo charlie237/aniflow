@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { appConfig } from "@/lib/config";
 
 export const SESSION_COOKIE = "aniflow_session";
@@ -37,23 +37,41 @@ export function verifyPassword(password: string) {
 }
 
 export async function setSessionCookie() {
-  const jar = await cookies();
+  const [jar, secure] = await Promise.all([cookies(), shouldUseSecureCookie()]);
   jar.set(SESSION_COOKIE, createSessionToken(), {
     httpOnly: true,
     sameSite: "lax",
+    secure,
     path: "/",
     maxAge: SESSION_TTL_SECONDS
   });
 }
 
 export async function clearSessionCookie() {
-  const jar = await cookies();
+  const [jar, secure] = await Promise.all([cookies(), shouldUseSecureCookie()]);
   jar.set(SESSION_COOKIE, "", {
     httpOnly: true,
     sameSite: "lax",
+    secure,
     path: "/",
     maxAge: 0
   });
+}
+
+async function shouldUseSecureCookie() {
+  const override = process.env.COOKIE_SECURE?.trim().toLowerCase();
+  if (override === "true" || override === "1") return true;
+  if (override === "false" || override === "0") return false;
+  try {
+    const reqHeaders = await headers();
+    const proto = reqHeaders.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+    if (proto === "https") return true;
+    const origin = reqHeaders.get("origin")?.trim().toLowerCase();
+    if (origin?.startsWith("https://")) return true;
+  } catch {
+    // headers() unavailable outside request context
+  }
+  return false;
 }
 
 export async function hasValidSession() {

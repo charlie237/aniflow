@@ -43,6 +43,7 @@ const zhCN = {
     descriptionPrefix: "已启用 AUTH_PASSWORD，请输入访问密码。",
     password: "访问密码",
     invalid: "密码不正确",
+    rateLimited: "失败次数过多，请稍后再试",
     failed: "登录失败，请重试",
     submit: "进入控制台"
   },
@@ -300,6 +301,8 @@ const zhCN = {
       "每个 115 离线任务进入独占的 job 目录，校验后再重命名并移动到媒体库。",
     baseUrl: "OpenList 地址",
     token: "OpenList Token",
+    tokenConfiguredPlaceholder: "已配置（留空保持不变）",
+    clearToken: "清空已保存的 Token",
     incomingPath: "下载目录（全局根）",
     incomingHelp:
       "离线下载的全局根路径。每个任务固定使用“根路径/jobs/job-id”独占目录；系统不会按文件名猜测归属，也不会自动删除失败残留。检测时会把根路径同步到 OpenList 后台配置。",
