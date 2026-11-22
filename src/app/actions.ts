@@ -23,10 +23,7 @@ import {
   upsertFeedItem
 } from "@/lib/db/repositories";
 import type { RuleType, SystemSettings, WorkerTaskType } from "@/lib/db/types";
-import {
-  confirmJob,
-  retryJob
-} from "@/lib/worker/pipeline";
+import { confirmJob, retryJob } from "@/lib/worker/pipeline";
 import { kickWorkerTaskRunner } from "@/lib/worker/tasks";
 import {
   check115Connectivity,
@@ -39,12 +36,19 @@ import { RUNTIME_RESET_CONFIRM_PHRASE } from "@/lib/runtime-reset";
 import { toBool } from "@/lib/utils";
 import { isMikanDownloadUrl, isMikanRssUrl } from "@/lib/net/url-policy";
 
+export interface ActionResult<T = undefined> {
+  ok: boolean;
+  message?: string;
+  error?: string;
+  data?: T;
+}
+
 const mikanRssUrlSchema = z.string().url().refine(isMikanRssUrl, {
-  message: "Only mikanani.me/RSS/ feed URLs are supported"
+  message: "Only mikanani.me/RSS/ or allowed Mikan mirror URLs are supported"
 });
 
 const parsedSubscriptionSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().trim().min(1),
   rssUrl: mikanRssUrlSchema,
   releaseGroup: z.string().min(1),
   resolution: z.string().min(1),
@@ -112,295 +116,446 @@ const manualEpisodeSchema = z.object({
   episodeNumber: z.coerce.number().int().min(0).max(999),
   releaseRevision: z.coerce.number().int().min(1).max(99).default(1),
   sourceUrl: z.string().trim().min(1).refine(isDownloadUrl, {
-    message: "Enter a magnet or http(s) download URL"
+    message: "Enter a magnet or Mikan torrent download URL"
   }),
   title: z.string().trim().optional().default("")
 });
 
-export async function createParsedSubscriptionAction(formData: FormData) {
-  const settings = getSystemSettings();
-  const parsed = parsedSubscriptionSchema.parse({
-    name: formData.get("name"),
-    rssUrl: formData.get("rssUrl"),
-    releaseGroup: optionalFormString(formData.get("releaseGroup")),
-    resolution: optionalFormString(formData.get("resolution")),
-    subtitleLanguage: optionalFormString(formData.get("subtitleLanguage")),
-    seasonNumber: formData.get("seasonNumber") ?? 1,
-    autoDownload: toBool(formData.get("autoDownload"))
-  });
-
-  const subscription = createSubscription({
-    name: parsed.name,
-    rssUrl: parsed.rssUrl,
-    enabled: true,
-    autoDownload: parsed.autoDownload,
-    seasonNumber: parsed.seasonNumber,
-    destinationRoot: settings.mediaLibraryRoot,
-    incomingPath: null
-  });
-
-  if (subscription) {
-    const rules: Array<[RuleType, string]> = [
-      ["group_allow", parsed.releaseGroup],
-      ["resolution_allow", parsed.resolution],
-      ["language_allow", parsed.subtitleLanguage]
-    ];
-    for (const [type, value] of rules) {
-      addRule(subscription.id, type, value);
-    }
-    enqueueAndKickWorkerTask("poll_subscription", subscription.id);
-  }
-
-  revalidatePath("/");
-  revalidatePath("/subscriptions");
-}
-
-export async function updateParsedSubscriptionAction(formData: FormData) {
-  const settings = getSystemSettings();
-  const existing = getSubscription(Number(formData.get("id")));
-  if (!existing) return;
-
-  const parsed = editableSubscriptionSchema.parse({
-    id: formData.get("id"),
-    name: formData.get("name"),
-    rssUrl: formData.get("rssUrl"),
-    releaseGroup: optionalFormString(formData.get("releaseGroup")),
-    resolution: optionalFormString(formData.get("resolution")),
-    subtitleLanguage: optionalFormString(formData.get("subtitleLanguage")),
-    seasonNumber: formData.get("seasonNumber") ?? 1,
-    autoDownload: toBool(formData.get("autoDownload"))
-  });
-
-  updateSubscription(parsed.id, {
-    name: parsed.name,
-    rssUrl: parsed.rssUrl,
-    enabled: existing.enabled,
-    autoDownload: parsed.autoDownload,
-    seasonNumber: parsed.seasonNumber,
-    destinationRoot: existing.destinationRoot || settings.mediaLibraryRoot,
-    // Legacy value is retained for database compatibility but no longer used.
-    incomingPath: existing.incomingPath,
-    tmdbSeriesId: existing.tmdbSeriesId
-  });
-
-  replaceSubscriptionAllowRules(parsed.id, [
-    { type: "group_allow", value: parsed.releaseGroup },
-    { type: "resolution_allow", value: parsed.resolution },
-    { type: "language_allow", value: parsed.subtitleLanguage }
-  ]);
-
-  revalidatePath("/");
-  revalidatePath("/subscriptions");
-}
-
-export async function archiveSubscriptionAction(formData: FormData) {
-  const id = Number(formData.get("id"));
-  if (!Number.isInteger(id) || id <= 0) return;
-  archiveSubscription(id);
-  revalidatePath("/");
-  revalidatePath("/subscriptions");
-}
-
-export async function restoreSubscriptionAction(formData: FormData) {
-  const id = Number(formData.get("id"));
-  if (!Number.isInteger(id) || id <= 0) return;
-  const subscription = restoreSubscription(id);
-  if (subscription) {
-    enqueueAndKickWorkerTask("poll_subscription", subscription.id);
-  }
-  revalidatePath("/");
-  revalidatePath("/subscriptions");
-}
-
-export async function addRuleAction(formData: FormData) {
-  const parsed = ruleSchema.parse({
-    subscriptionId: formData.get("subscriptionId"),
-    type: formData.get("type"),
-    value: formData.get("value")
-  });
-  addRule(parsed.subscriptionId, parsed.type as RuleType, parsed.value);
-  revalidatePath("/");
-  revalidatePath("/subscriptions");
-}
-
-export async function deleteRuleAction(formData: FormData) {
-  const id = Number(formData.get("id"));
-  if (Number.isFinite(id)) deleteRule(id);
-  revalidatePath("/");
-  revalidatePath("/subscriptions");
-}
-
-export async function deleteSubscriptionAction(formData: FormData) {
-  const id = Number(formData.get("id"));
-  if (Number.isFinite(id)) {
-    deleteSubscription(id);
-  }
-  revalidatePath("/");
-  revalidatePath("/subscriptions");
-}
-
-export async function pollSubscriptionAction(formData: FormData) {
-  const id = Number(formData.get("id"));
-  if (!Number.isFinite(id)) return;
-  const subscription = getSubscription(id);
-  if (!subscription) return;
-  enqueueAndKickWorkerTask("poll_subscription", subscription.id);
-  revalidatePath("/");
-  revalidatePath("/subscriptions");
-}
-
-export async function pollAllSubscriptionsAction() {
-  enqueueAndKickWorkerTask("poll_all");
-  revalidatePath("/");
-  revalidatePath("/subscriptions");
-}
-
-export async function pollSelectedSubscriptionAction(formData: FormData) {
-  const value = formData.get("subscriptionId")?.toString();
-  if (value === "all") {
-    enqueueAndKickWorkerTask("poll_all");
-  } else {
-    const id = Number(value);
-    if (!Number.isFinite(id)) return;
-    const subscription = getSubscription(id);
-    if (!subscription) return;
-    enqueueAndKickWorkerTask("poll_subscription", subscription.id);
-  }
-  revalidatePath("/");
-  revalidatePath("/subscriptions");
-}
-
-export async function submitQueueAction() {
-  enqueueAndKickWorkerTask("submit_queued");
-  revalidatePath("/");
-}
-
-export async function scanIncomingAction() {
-  enqueueAndKickWorkerTask("scan_incoming");
-  revalidatePath("/");
-}
-
-export async function retryJobAction(formData: FormData) {
-  const id = Number(formData.get("id"));
-  if (Number.isFinite(id)) await retryJob(id);
-  revalidatePath("/");
-}
-
-export async function confirmJobAction(formData: FormData) {
-  const id = Number(formData.get("id"));
-  if (Number.isFinite(id)) await confirmJob(id);
-  revalidatePath("/");
-}
-
-export async function forceConfirmJobAction(formData: FormData) {
-  const id = Number(formData.get("id"));
-  if (Number.isFinite(id)) await confirmJob(id, { force: true });
-  revalidatePath("/");
-}
-
-export async function manualSupplementEpisodeAction(formData: FormData) {
-  const parsed = manualEpisodeSchema.parse({
-    subscriptionId: formData.get("subscriptionId"),
-    episodeNumber: formData.get("episodeNumber"),
-    releaseRevision: formData.get("releaseRevision") || 1,
-    sourceUrl: formData.get("sourceUrl"),
-    title: formData.get("title")?.toString() ?? ""
-  });
-  const subscription = getSubscription(parsed.subscriptionId);
-  if (!subscription) return;
-
-  const rules = listRules(subscription.id).filter((rule) => rule.enabled);
-  const releaseGroup = coreRuleValue(rules, "group_allow");
-  const resolution = coreRuleValue(rules, "resolution_allow");
-  const subtitleLanguage = coreRuleValue(rules, "language_allow");
-  const episodeText = String(parsed.episodeNumber).padStart(2, "0");
-  const revisionSuffix =
-    parsed.releaseRevision > 1 ? `v${parsed.releaseRevision}` : "";
-  const title =
-    parsed.title ||
-    manualEpisodeTitle({
-      subscriptionName: subscription.name,
-      episodeText,
-      revisionSuffix,
-      releaseGroup,
-      resolution,
-      subtitleLanguage
+export async function createParsedSubscriptionAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const settings = getSystemSettings();
+    const parsed = parsedSubscriptionSchema.parse({
+      name: formData.get("name"),
+      rssUrl: formData.get("rssUrl"),
+      releaseGroup: optionalFormString(formData.get("releaseGroup")),
+      resolution: optionalFormString(formData.get("resolution")),
+      subtitleLanguage: optionalFormString(formData.get("subtitleLanguage")),
+      seasonNumber: formData.get("seasonNumber") ?? 1,
+      autoDownload: toBool(formData.get("autoDownload"))
     });
-  const guid = [
-    "manual",
-    subscription.id,
-    parsed.episodeNumber,
-    parsed.releaseRevision,
-    shortHash(parsed.sourceUrl)
-  ].join(":");
 
-  const feedItem = upsertFeedItem(subscription, {
-    guid,
-    rssGuid: guid,
-    title,
-    link: parsed.sourceUrl.startsWith("magnet:") ? null : parsed.sourceUrl,
-    downloadUrl: parsed.sourceUrl,
-    publishedAt: new Date().toISOString(),
-    rawXmlJson: JSON.stringify({
-      manual: true,
-      sourceUrl: parsed.sourceUrl
-    }),
-    metadata: {
-      releaseGroup,
-      parsedTitle: subscription.name,
-      episodeNumber: parsed.episodeNumber,
-      episodeText,
-      releaseRevision: parsed.releaseRevision,
-      resolution,
-      subtitleLanguage,
-      container: null,
-      tags: [releaseGroup, resolution, subtitleLanguage].filter(
-        (value): value is string => Boolean(value)
-      ),
-      parseConfidence: 100,
-      needsReview: false
+    const subscription = createSubscription({
+      name: parsed.name,
+      rssUrl: parsed.rssUrl,
+      enabled: true,
+      autoDownload: parsed.autoDownload,
+      seasonNumber: parsed.seasonNumber,
+      destinationRoot: settings.mediaLibraryRoot,
+      incomingPath: null
+    });
+
+    if (subscription) {
+      const rules: Array<[RuleType, string]> = [
+        ["group_allow", parsed.releaseGroup],
+        ["resolution_allow", parsed.resolution],
+        ["language_allow", parsed.subtitleLanguage]
+      ];
+      for (const [type, value] of rules) {
+        addRule(subscription.id, type, value);
+      }
+      enqueueAndKickWorkerTask("poll_subscription", subscription.id);
     }
-  });
 
-  createOrUpdateJob({
-    subscriptionId: subscription.id,
-    feedItemId: feedItem.id,
-    status: "queued",
-    sourceUrl: parsed.sourceUrl,
-    errorMessage: null
-  });
-  enqueueAndKickWorkerTask("submit_queued");
-  revalidatePath("/");
+    revalidatePath("/");
+    revalidatePath("/subscriptions");
+    return { ok: true, message: t("toast.subscriptionCreated") };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
 }
 
-export async function saveSettingsAction(formData: FormData) {
-  const parsed = parseSettingsForm(formData);
-  const settings = saveSystemSettings(parsed);
-  await ensureConfiguredOpenListDirectories(settings).catch(() => undefined);
-  revalidatePath("/");
-  revalidatePath("/settings");
+export async function updateParsedSubscriptionAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const settings = getSystemSettings();
+    const existing = getSubscription(Number(formData.get("id")));
+    if (!existing) {
+      return { ok: false, error: "Subscription not found" };
+    }
+
+    const parsed = editableSubscriptionSchema.parse({
+      id: formData.get("id"),
+      name: formData.get("name"),
+      rssUrl: formData.get("rssUrl"),
+      releaseGroup: optionalFormString(formData.get("releaseGroup")),
+      resolution: optionalFormString(formData.get("resolution")),
+      subtitleLanguage: optionalFormString(formData.get("subtitleLanguage")),
+      seasonNumber: formData.get("seasonNumber") ?? 1,
+      autoDownload: toBool(formData.get("autoDownload"))
+    });
+
+    updateSubscription(parsed.id, {
+      name: parsed.name,
+      rssUrl: parsed.rssUrl,
+      enabled: existing.enabled,
+      autoDownload: parsed.autoDownload,
+      seasonNumber: parsed.seasonNumber,
+      destinationRoot: existing.destinationRoot || settings.mediaLibraryRoot,
+      // Legacy value is retained for database compatibility but no longer used.
+      incomingPath: existing.incomingPath,
+      tmdbSeriesId: existing.tmdbSeriesId
+    });
+
+    replaceSubscriptionAllowRules(parsed.id, [
+      { type: "group_allow", value: parsed.releaseGroup },
+      { type: "resolution_allow", value: parsed.resolution },
+      { type: "language_allow", value: parsed.subtitleLanguage }
+    ]);
+
+    revalidatePath("/");
+    revalidatePath("/subscriptions");
+    return { ok: true, message: t("toast.subscriptionUpdated") };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
 }
 
-export async function check115ConnectivityAction(formData: FormData) {
-  const parsed = parseSettingsForm(formData);
-  const settings = saveSystemSettings(parsed);
-  const directoryCheck = await ensureConfiguredOpenListDirectoriesCheck(settings);
-  const tempDirCheck = await configure115TempDirCheck(settings.openlistIncomingPath);
-  const result = await check115Connectivity();
-  const checks = [...result.checks];
-  const apiCheckIndex = checks.findIndex((check) => check.label === "OpenList API");
-  checks.splice(
-    apiCheckIndex >= 0 ? apiCheckIndex + 1 : 0,
-    0,
-    directoryCheck,
-    tempDirCheck
-  );
-  const mergedResult = {
-    ok: checks.every((check) => check.ok),
-    checks
-  };
-  const payload = Buffer.from(JSON.stringify(mergedResult)).toString("base64url");
-  redirect(`/settings?check=${payload}`);
+export async function archiveSubscriptionAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const id = Number(formData.get("id"));
+    if (!Number.isInteger(id) || id <= 0) {
+      return { ok: false, error: "Invalid subscription id" };
+    }
+    archiveSubscription(id);
+    revalidatePath("/");
+    revalidatePath("/subscriptions");
+    return { ok: true, message: t("toast.subscriptionArchived") };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function restoreSubscriptionAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const id = Number(formData.get("id"));
+    if (!Number.isInteger(id) || id <= 0) {
+      return { ok: false, error: "Invalid subscription id" };
+    }
+    const subscription = restoreSubscription(id);
+    if (subscription) {
+      enqueueAndKickWorkerTask("poll_subscription", subscription.id);
+    }
+    revalidatePath("/");
+    revalidatePath("/subscriptions");
+    return { ok: true, message: t("toast.subscriptionRestored") };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function addRuleAction(formData: FormData): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const parsed = ruleSchema.parse({
+      subscriptionId: formData.get("subscriptionId"),
+      type: formData.get("type"),
+      value: formData.get("value")
+    });
+    addRule(parsed.subscriptionId, parsed.type as RuleType, parsed.value);
+    revalidatePath("/");
+    revalidatePath("/subscriptions");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function deleteRuleAction(formData: FormData): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const id = Number(formData.get("id"));
+    if (Number.isFinite(id)) deleteRule(id);
+    revalidatePath("/");
+    revalidatePath("/subscriptions");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function deleteSubscriptionAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const id = Number(formData.get("id"));
+    if (!Number.isInteger(id) || id <= 0) {
+      return { ok: false, error: "Invalid subscription id" };
+    }
+    deleteSubscription(id);
+    revalidatePath("/");
+    revalidatePath("/subscriptions");
+    return { ok: true, message: t("toast.subscriptionDeleted") };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function pollSubscriptionAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const id = Number(formData.get("id"));
+    if (!Number.isFinite(id)) return { ok: false, error: "Invalid subscription id" };
+    const subscription = getSubscription(id);
+    if (!subscription) return { ok: false, error: "Subscription not found" };
+    enqueueAndKickWorkerTask("poll_subscription", subscription.id);
+    revalidatePath("/");
+    revalidatePath("/subscriptions");
+    return { ok: true, message: t("toast.pollQueued") };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function pollAllSubscriptionsAction(): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    enqueueAndKickWorkerTask("poll_all");
+    revalidatePath("/");
+    revalidatePath("/subscriptions");
+    return { ok: true, message: t("toast.pollQueued") };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function pollSelectedSubscriptionAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const value = formData.get("subscriptionId")?.toString();
+    if (value === "all") {
+      enqueueAndKickWorkerTask("poll_all");
+    } else {
+      const id = Number(value);
+      if (!Number.isFinite(id)) {
+        return { ok: false, error: "Invalid subscription id" };
+      }
+      const subscription = getSubscription(id);
+      if (!subscription) {
+        return { ok: false, error: "Subscription not found" };
+      }
+      enqueueAndKickWorkerTask("poll_subscription", subscription.id);
+    }
+    revalidatePath("/");
+    revalidatePath("/subscriptions");
+    return { ok: true, message: t("toast.pollQueued") };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function submitQueueAction(): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    enqueueAndKickWorkerTask("submit_queued");
+    revalidatePath("/");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function scanIncomingAction(): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    enqueueAndKickWorkerTask("scan_incoming");
+    revalidatePath("/");
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function retryJobAction(formData: FormData): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const id = Number(formData.get("id"));
+    if (!Number.isFinite(id)) return { ok: false, error: "Invalid job id" };
+    await retryJob(id);
+    revalidatePath("/");
+    return { ok: true, message: t("toast.jobRetried") };
+  } catch (error) {
+    revalidatePath("/");
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function confirmJobAction(formData: FormData): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const id = Number(formData.get("id"));
+    if (!Number.isFinite(id)) return { ok: false, error: "Invalid job id" };
+    await confirmJob(id);
+    revalidatePath("/");
+    return { ok: true, message: t("toast.jobConfirmed") };
+  } catch (error) {
+    revalidatePath("/");
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function forceConfirmJobAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const id = Number(formData.get("id"));
+    if (!Number.isFinite(id)) return { ok: false, error: "Invalid job id" };
+    await confirmJob(id, { force: true });
+    revalidatePath("/");
+    return { ok: true, message: t("toast.jobForceConfirmed") };
+  } catch (error) {
+    revalidatePath("/");
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function manualSupplementEpisodeAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const parsed = manualEpisodeSchema.parse({
+      subscriptionId: formData.get("subscriptionId"),
+      episodeNumber: formData.get("episodeNumber"),
+      releaseRevision: formData.get("releaseRevision") || 1,
+      sourceUrl: formData.get("sourceUrl"),
+      title: formData.get("title")?.toString() ?? ""
+    });
+    const subscription = getSubscription(parsed.subscriptionId);
+    if (!subscription) return { ok: false, error: "Subscription not found" };
+
+    const rules = listRules(subscription.id).filter((rule) => rule.enabled);
+    const releaseGroup = coreRuleValue(rules, "group_allow");
+    const resolution = coreRuleValue(rules, "resolution_allow");
+    const subtitleLanguage = coreRuleValue(rules, "language_allow");
+    const episodeText = String(parsed.episodeNumber).padStart(2, "0");
+    const revisionSuffix =
+      parsed.releaseRevision > 1 ? `v${parsed.releaseRevision}` : "";
+    const title =
+      parsed.title ||
+      manualEpisodeTitle({
+        subscriptionName: subscription.name,
+        episodeText,
+        revisionSuffix,
+        releaseGroup,
+        resolution,
+        subtitleLanguage
+      });
+    const guid = [
+      "manual",
+      subscription.id,
+      parsed.episodeNumber,
+      parsed.releaseRevision,
+      shortHash(parsed.sourceUrl)
+    ].join(":");
+
+    const feedItem = upsertFeedItem(subscription, {
+      guid,
+      rssGuid: guid,
+      title,
+      link: parsed.sourceUrl.startsWith("magnet:") ? null : parsed.sourceUrl,
+      downloadUrl: parsed.sourceUrl,
+      publishedAt: new Date().toISOString(),
+      rawXmlJson: JSON.stringify({
+        manual: true,
+        sourceUrl: parsed.sourceUrl
+      }),
+      metadata: {
+        releaseGroup,
+        parsedTitle: subscription.name,
+        episodeNumber: parsed.episodeNumber,
+        episodeText,
+        releaseRevision: parsed.releaseRevision,
+        resolution,
+        subtitleLanguage,
+        container: null,
+        tags: [releaseGroup, resolution, subtitleLanguage].filter(
+          (value): value is string => Boolean(value)
+        ),
+        parseConfidence: 100,
+        needsReview: false
+      }
+    });
+
+    createOrUpdateJob({
+      subscriptionId: subscription.id,
+      feedItemId: feedItem.id,
+      status: "queued",
+      sourceUrl: parsed.sourceUrl,
+      errorMessage: null
+    });
+    enqueueAndKickWorkerTask("submit_queued");
+    revalidatePath("/");
+    return { ok: true, message: t("toast.manualQueued") };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function saveSettingsAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const parsed = parseSettingsForm(formData);
+    const settings = saveSystemSettings(parsed);
+    await ensureConfiguredOpenListDirectories(settings).catch(() => undefined);
+    revalidatePath("/");
+    revalidatePath("/settings");
+    return { ok: true, message: t("toast.settingsSaved") };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function check115ConnectivityAction(
+  formData: FormData
+): Promise<ActionResult<OpenList115CheckResult>> {
+  const { t } = await getDictionary();
+  try {
+    const parsed = parseSettingsForm(formData);
+    const settings = saveSystemSettings(parsed);
+    const directoryCheck = await ensureConfiguredOpenListDirectoriesCheck(settings);
+    const tempDirCheck = await configure115TempDirCheck(settings.openlistIncomingPath);
+    const result = await check115Connectivity(t);
+    const checks = [...result.checks];
+    const apiCheckIndex = checks.findIndex((check) => check.label === "OpenList API");
+    checks.splice(
+      apiCheckIndex >= 0 ? apiCheckIndex + 1 : 0,
+      0,
+      directoryCheck,
+      tempDirCheck
+    );
+    const mergedResult: OpenList115CheckResult = {
+      ok: checks.every((check) => check.ok),
+      checks
+    };
+    revalidatePath("/");
+    revalidatePath("/settings");
+    return {
+      ok: mergedResult.ok,
+      message: mergedResult.ok ? t("toast.checkPassed") : t("toast.checkFailed"),
+      data: mergedResult
+    };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
 }
 
 export async function resetRuntimeDataAction(formData: FormData) {
@@ -577,4 +732,21 @@ function isEmptyOrValidProxyUrl(value: string) {
 function optionalFormString(value: FormDataEntryValue | null) {
   const text = value?.toString().trim();
   return text || undefined;
+}
+
+function formatActionError(
+  error: unknown,
+  t: (key: string, params?: Record<string, string | number>) => string
+) {
+  if (error instanceof z.ZodError) {
+    const issue = error.issues[0];
+    if (!issue) return "Invalid input";
+    const field = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+    return `${field}${issue.message}`;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (/UNIQUE constraint failed:\s*subscriptions\.rss_url/i.test(message)) {
+    return t("toast.duplicateRss");
+  }
+  return message;
 }

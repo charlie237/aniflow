@@ -1,12 +1,7 @@
-import {
-  Activity,
-  RotateCw,
-  ServerCrash
-} from "lucide-react";
-import { pollSelectedSubscriptionAction } from "@/app/actions";
+import { Activity, ServerCrash } from "lucide-react";
 import { AppShell } from "@/components/app-shell";
 import { DashboardMotion } from "@/components/dashboard-motion";
-import { Button } from "@/components/ui/button";
+import { OverviewPollForm } from "@/components/overview-poll-form";
 import { cn } from "@/lib/utils";
 import { EpisodeTable } from "@/components/episode-table";
 import { WorkerTaskTable } from "@/components/worker-task-table";
@@ -55,28 +50,14 @@ export default async function HomePage({
                 {t("overview.description")}
               </p>
             </div>
-            <form
-              action={pollSelectedSubscriptionAction}
-              className="flex w-full min-w-0 items-center gap-2 sm:w-auto lg:max-w-md lg:shrink-0 lg:justify-end"
-            >
-              <select
-                name="subscriptionId"
-                defaultValue={defaultPollTarget}
-                className="h-9 min-w-0 flex-1 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] px-3 text-sm shadow-[var(--shadow)] focus:outline-none focus:ring-2 focus:ring-[var(--signal)] sm:w-48 sm:flex-none"
-              >
-                {enabledSubscriptions.map((subscription) => (
-                  <option key={subscription.id} value={subscription.id}>
-                    {subscription.name} / S
-                    {String(subscription.seasonNumber).padStart(2, "0")}
-                  </option>
-                ))}
-                <option value="all">{t("common.allSubscriptions")}</option>
-              </select>
-              <Button variant="signal" className="shrink-0 whitespace-nowrap">
-                <RotateCw className="size-4" />
-                {t("overview.poll")}
-              </Button>
-            </form>
+            <OverviewPollForm
+              subscriptions={enabledSubscriptions.map((subscription) => ({
+                id: subscription.id,
+                name: subscription.name,
+                seasonNumber: subscription.seasonNumber
+              }))}
+              defaultTarget={defaultPollTarget}
+            />
           </div>
 
           <DashboardMotion
@@ -138,6 +119,7 @@ export default async function HomePage({
         <WorkerTaskTable
           pageData={data.workerTaskPage}
           subscriptions={data.subscriptions}
+          hasActiveDownloads={data.stats.queuedJobs > 0}
         />
       </div>
     </AppShell>

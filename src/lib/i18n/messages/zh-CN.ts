@@ -360,7 +360,40 @@ const zhCN = {
     tokenOk: "Token 可用",
     tokenOkUser: "Token 可用：{user}",
     accessMode: "115 接入方式",
-    incomingDir: "下载目录"
+    incomingDir: "下载目录",
+    modeProviderReady: "下载目录属于 {provider} 挂载，可按 {mode} 直接提交；OpenList ready 工具列表也包含该接入方式",
+    modeProviderPartial: "下载目录属于 {provider} 挂载，可按 {mode} 直接提交；ready 工具列表只返回：{tools}",
+    modeMissing: "OpenList ready 工具未包含 {mode}，当前 ready 工具：{tools}；请确认下载目录属于对应 115 挂载，或点击检测同步 OpenList 后台配置",
+    pathNoWrite: "{checkedPath} 可访问，但当前用户没有写权限{provider}",
+    pathModeMismatch: "{checkedPath} 可访问且可写{provider}，但当前选择的是 {mode}；下载目录必须位于对应的 115 挂载下",
+    pathParentReady: "{path} 还不存在；父目录 {checkedPath} 可访问且可写{provider}，离线任务会尝试创建下载目录",
+    pathReady: "{path} 可访问且可写{provider}",
+    pathNotFound: "{path} 及其父目录在 OpenList 中不可访问：{message}。请确认第一段挂载名存在，例如 /115/Anime/_incoming 里的 /115 必须是 OpenList 里的 115 挂载"
+  },
+  rules: {
+    groupNotAllowed: "字幕组不在白名单",
+    groupBlocked: "字幕组 {value} 已屏蔽",
+    resolutionNotAllowed: "分辨率不在允许范围",
+    languageNotAllowed: "字幕语言不在允许范围",
+    keywordMissing: "缺少关键词 {value}",
+    keywordExcluded: "命中排除词 {value}"
+  },
+  toast: {
+    settingsSaved: "设置已保存",
+    checkPassed: "115 连通性检测通过",
+    checkFailed: "115 连通性检测未通过，请查看详情",
+    subscriptionCreated: "订阅已创建，正在同步 RSS",
+    subscriptionUpdated: "订阅已更新",
+    subscriptionArchived: "订阅已归档",
+    subscriptionRestored: "订阅已恢复，正在同步 RSS",
+    subscriptionDeleted: "订阅已删除",
+    duplicateRss: "该 RSS 链接已存在订阅",
+    pollQueued: "已加入同步与轮询队列",
+    jobRetried: "已重新提交下载",
+    jobConfirmed: "已确认并提交下载",
+    jobForceConfirmed: "已强制提交下载",
+    manualQueued: "已加入离线下载队列",
+    actionFailed: "操作失败：{error}"
   }
 } as const;
 

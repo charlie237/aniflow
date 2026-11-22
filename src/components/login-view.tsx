@@ -5,8 +5,8 @@ import { loginAction } from "@/app/auth-actions";
 import { LocaleToggle } from "@/components/locale-toggle";
 import { useI18n } from "@/components/locale-provider";
 import { AnimateIn } from "@/components/motion";
+import { SubmitButton } from "@/components/submit-button";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -79,9 +79,9 @@ export function LoginView({
                       : t("login.failed")}
                 </p>
               ) : null}
-              <Button type="submit" className="w-full" variant="signal">
+              <SubmitButton className="w-full" variant="signal">
                 {t("login.submit")}
-              </Button>
+              </SubmitButton>
             </form>
           </CardContent>
         </Card>

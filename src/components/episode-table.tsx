@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Eye,
   FileVideo,
+  Loader2,
   PlayCircle,
   Plus,
   RotateCcw,
@@ -15,11 +16,13 @@ import {
   RadioTower,
   X
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   confirmJobAction,
   forceConfirmJobAction,
   manualSupplementEpisodeAction,
-  retryJobAction
+  retryJobAction,
+  type ActionResult
 } from "@/app/actions";
 import { useI18n } from "@/components/locale-provider";
 import { Badge } from "@/components/ui/badge";
@@ -349,46 +352,32 @@ export function EpisodeTable({
                   <TableCell>
                     <div className="flex justify-end gap-1">
                       {row.job?.status === "failed" ? (
-                        <>
-                          <form action={retryJobAction}>
-                            <input type="hidden" name="id" value={row.job.id} />
-                            <Button
-                              size="icon"
-                              variant="ghost"
-                              aria-label={t("episode.retryDownload")}
-                              title={t("episode.retryDownloadTitle")}
-                            >
-                              <RotateCcw className="size-4" />
-                            </Button>
-                          </form>
-                        </>
+                        <JobActionButton
+                          jobId={row.job.id}
+                          action={retryJobAction}
+                          label={t("episode.retryDownload")}
+                          title={t("episode.retryDownloadTitle")}
+                          icon={<RotateCcw className="size-4" />}
+                        />
                       ) : null}
                       {row.job?.status === "needs_review" ||
                       row.job?.status === "discovered" ? (
-                        <form action={confirmJobAction}>
-                          <input type="hidden" name="id" value={row.job.id} />
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            aria-label={t("episode.confirmDownload")}
-                            title={t("episode.confirmDownloadTitle")}
-                          >
-                            <CheckCircle2 className="size-4" />
-                          </Button>
-                        </form>
+                        <JobActionButton
+                          jobId={row.job.id}
+                          action={confirmJobAction}
+                          label={t("episode.confirmDownload")}
+                          title={t("episode.confirmDownloadTitle")}
+                          icon={<CheckCircle2 className="size-4" />}
+                        />
                       ) : null}
                       {row.job?.status === "skipped" ? (
-                        <form action={forceConfirmJobAction}>
-                          <input type="hidden" name="id" value={row.job.id} />
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            aria-label={t("episode.forceDownload")}
-                            title={t("episode.forceDownloadTitle")}
-                          >
-                            <CheckCircle2 className="size-4" />
-                          </Button>
-                        </form>
+                        <JobActionButton
+                          jobId={row.job.id}
+                          action={forceConfirmJobAction}
+                          label={t("episode.forceDownload")}
+                          title={t("episode.forceDownloadTitle")}
+                          icon={<CheckCircle2 className="size-4" />}
+                        />
                       ) : null}
                       <EpisodeDetails row={row} />
                     </div>
@@ -416,19 +405,81 @@ export function EpisodeTable({
   );
 }
 
+function JobActionButton({
+  jobId,
+  action,
+  label,
+  title,
+  icon
+}: {
+  jobId: number;
+  action: (formData: FormData) => Promise<ActionResult>;
+  label: string;
+  title: string;
+  icon: ReactNode;
+}) {
+  const { t } = useI18n();
+  const [pending, startTransition] = useTransition();
+
+  function handleAction(formData: FormData) {
+    startTransition(async () => {
+      const result = await action(formData);
+      if (result.ok) {
+        if (result.message) toast.success(result.message);
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
+
+  return (
+    <form action={handleAction}>
+      <input type="hidden" name="id" value={jobId} />
+      <Button
+        type="submit"
+        size="icon"
+        variant="ghost"
+        disabled={pending}
+        aria-label={label}
+        title={title}
+      >
+        {pending ? <Loader2 className="size-4 animate-spin" /> : icon}
+      </Button>
+    </form>
+  );
+}
+
 function ManualSupplementDialog({
   pageData
 }: {
   pageData: DashboardData["episodePage"];
 }) {
   const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
   const defaultSubscriptionId =
     pageData.filters.subscriptionId ??
     pageData.manualSubscriptionOptions[0]?.id ??
     "";
 
+  function handleSubmit(formData: FormData) {
+    startTransition(async () => {
+      const result = await manualSupplementEpisodeAction(formData);
+      if (result.ok) {
+        toast.success(result.message ?? t("toast.manualQueued"));
+        setOpen(false);
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
+
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button
           type="button"
@@ -448,7 +499,7 @@ function ManualSupplementDialog({
             {t("episode.manualDescription")}
           </DialogDescription>
         </DialogHeader>
-        <form action={manualSupplementEpisodeAction} className="grid gap-4">
+        <form action={handleSubmit} className="grid gap-4">
           <div className="grid gap-1.5">
             <Label htmlFor="manual-subscription">{t("episode.subscription")}</Label>
             <select
@@ -508,8 +559,12 @@ function ManualSupplementDialog({
             />
           </div>
           <div className="flex justify-end">
-            <Button type="submit" variant="signal">
-              <Plus className="size-4" />
+            <Button type="submit" variant="signal" disabled={pending}>
+              {pending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Plus className="size-4" />
+              )}
               {t("episode.enqueue")}
             </Button>
           </div>

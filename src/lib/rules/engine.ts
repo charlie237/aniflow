@@ -1,9 +1,12 @@
 import type { FilterRule, ReleaseMetadata } from "@/lib/db/types";
+import { createT, getMessages, type TranslateFn } from "@/lib/i18n";
 
 export interface RuleDecision {
   allowed: boolean;
   reasons: string[];
 }
+
+const defaultT = createT(getMessages("zh-CN"));
 
 /**
  * Strict filter: group / resolution / language must match as stored labels
@@ -13,7 +16,8 @@ export interface RuleDecision {
 export function evaluateRules(
   title: string,
   metadata: ReleaseMetadata | Omit<ReleaseMetadata, "id" | "feedItemId">,
-  rules: FilterRule[]
+  rules: FilterRule[],
+  t: TranslateFn = defaultT
 ): RuleDecision {
   const enabledRules = rules.filter((rule) => rule.enabled);
   const reasons: string[] = [];
@@ -34,12 +38,12 @@ export function evaluateRules(
     groupAllow.length > 0 &&
     !groupAllow.some((rule) => equalsLoose(metadata.releaseGroup, rule.value))
   ) {
-    reasons.push("字幕组不在白名单");
+    reasons.push(t("rules.groupNotAllowed"));
   }
 
   for (const rule of enabledRules.filter((entry) => entry.type === "group_block")) {
     if (equalsLoose(metadata.releaseGroup, rule.value)) {
-      reasons.push(`字幕组 ${rule.value} 已屏蔽`);
+      reasons.push(t("rules.groupBlocked", { value: rule.value }));
     }
   }
 
@@ -50,7 +54,7 @@ export function evaluateRules(
     resolutionAllow.length > 0 &&
     !resolutionAllow.some((rule) => equalsLoose(metadata.resolution, rule.value))
   ) {
-    reasons.push("分辨率不在允许范围");
+    reasons.push(t("rules.resolutionNotAllowed"));
   }
 
   const languageAllow = enabledRules.filter((rule) => rule.type === "language_allow");
@@ -60,18 +64,18 @@ export function evaluateRules(
       equalsLoose(metadata.subtitleLanguage, rule.value)
     )
   ) {
-    reasons.push("字幕语言不在允许范围");
+    reasons.push(t("rules.languageNotAllowed"));
   }
 
   for (const rule of enabledRules.filter((entry) => entry.type === "keyword_include")) {
     if (!haystack.includes(rule.value.toLowerCase())) {
-      reasons.push(`缺少关键词 ${rule.value}`);
+      reasons.push(t("rules.keywordMissing", { value: rule.value }));
     }
   }
 
   for (const rule of enabledRules.filter((entry) => entry.type === "keyword_exclude")) {
     if (haystack.includes(rule.value.toLowerCase())) {
-      reasons.push(`命中排除词 ${rule.value}`);
+      reasons.push(t("rules.keywordExcluded", { value: rule.value }));
     }
   }
 

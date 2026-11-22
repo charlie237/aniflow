@@ -1,7 +1,8 @@
 "use client";
 
-import { Save } from "lucide-react";
-import type { InputHTMLAttributes } from "react";
+import { Loader2, Save } from "lucide-react";
+import { useState, useTransition, type InputHTMLAttributes } from "react";
+import { toast } from "sonner";
 import {
   check115ConnectivityAction,
   saveSettingsAction
@@ -24,18 +25,53 @@ import { RUNTIME_RESET_CONFIRM_PHRASE } from "@/lib/runtime-reset";
 
 export function SettingsForm({
   settings,
-  checkResult,
   resetStatus
 }: {
   settings: PublicSystemSettings;
-  checkResult?: OpenList115CheckResult | null;
   resetStatus?: "runtime" | "confirm" | null;
 }) {
   const { t } = useI18n();
+  const [checkResult, setCheckResult] = useState<OpenList115CheckResult | null>(
+    null
+  );
+  const [saving, startSave] = useTransition();
+  const [checking, startCheck] = useTransition();
+  const busy = saving || checking;
+
+  function handleSave(formData: FormData) {
+    startSave(async () => {
+      const result = await saveSettingsAction(formData);
+      if (result.ok) {
+        toast.success(result.message ?? t("toast.settingsSaved"));
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
+
+  function handleCheck(formData: FormData) {
+    startCheck(async () => {
+      const result = await check115ConnectivityAction(formData);
+      if (result.data) {
+        setCheckResult(result.data);
+      }
+      if (result.ok) {
+        toast.success(result.message ?? t("toast.checkPassed"));
+      } else {
+        toast.error(
+          result.error
+            ? t("toast.actionFailed", { error: result.error })
+            : (result.message ?? t("toast.checkFailed"))
+        );
+      }
+    });
+  }
 
   return (
     <div className="grid gap-5">
-      <form action={saveSettingsAction} className="grid gap-5">
+      <form action={handleSave} className="grid gap-5">
         <Card>
           <CardHeader>
             <CardTitle>{t("settings.openlistTitle")}</CardTitle>
@@ -80,8 +116,10 @@ export function SettingsForm({
               <Button
                 type="submit"
                 variant="outline"
-                formAction={check115ConnectivityAction}
+                disabled={busy}
+                formAction={handleCheck}
               >
+                {checking ? <Loader2 className="size-4 animate-spin" /> : null}
                 {t("settings.check115")}
               </Button>
               {checkResult ? <CheckResult result={checkResult} /> : null}
@@ -232,8 +270,12 @@ export function SettingsForm({
               help={t("settings.downloadTimeoutHelp")}
             />
             <div className="md:col-span-2">
-              <Button variant="signal" type="submit">
-                <Save className="size-4" />
+              <Button variant="signal" type="submit" disabled={busy}>
+                {saving ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Save className="size-4" />
+                )}
                 {t("settings.save")}
               </Button>
             </div>

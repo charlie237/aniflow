@@ -379,7 +379,46 @@ const en = {
     tokenOk: "Token valid",
     tokenOkUser: "Token valid: {user}",
     accessMode: "115 access mode",
-    incomingDir: "Download directory"
+    incomingDir: "Download directory",
+    modeProviderReady:
+      "Download directory belongs to {provider} mount and can submit via {mode}; OpenList ready tools also include it",
+    modeProviderPartial:
+      "Download directory belongs to {provider} mount and can submit via {mode}; ready tools returned: {tools}",
+    modeMissing:
+      "OpenList ready tools do not include {mode} (current: {tools}); confirm the download directory is under the matching 115 mount or run the sync check",
+    pathNoWrite: "{checkedPath} is accessible, but the current user lacks write permission{provider}",
+    pathModeMismatch:
+      "{checkedPath} is accessible and writable{provider}, but {mode} is selected; the download directory must be under the matching 115 mount",
+    pathParentReady:
+      "{path} does not exist yet; parent {checkedPath} is writable{provider} and offline jobs will create it",
+    pathReady: "{path} is accessible and writable{provider}",
+    pathNotFound:
+      "{path} and its ancestors are inaccessible in OpenList: {message}. Confirm the first mount segment exists (e.g. /115 in /115/Anime/_incoming)"
+  },
+  rules: {
+    groupNotAllowed: "Subtitle group not in allowlist",
+    groupBlocked: "Subtitle group {value} is blocked",
+    resolutionNotAllowed: "Resolution not in allowlist",
+    languageNotAllowed: "Subtitle language not in allowlist",
+    keywordMissing: "Missing required keyword {value}",
+    keywordExcluded: "Matched excluded keyword {value}"
+  },
+  toast: {
+    settingsSaved: "Settings saved",
+    checkPassed: "115 connectivity check passed",
+    checkFailed: "115 connectivity check failed; see details",
+    subscriptionCreated: "Subscription created; syncing RSS",
+    subscriptionUpdated: "Subscription updated",
+    subscriptionArchived: "Subscription archived",
+    subscriptionRestored: "Subscription restored; syncing RSS",
+    subscriptionDeleted: "Subscription deleted",
+    duplicateRss: "A subscription with this RSS URL already exists",
+    pollQueued: "Sync & poll task queued",
+    jobRetried: "Download resubmitted",
+    jobConfirmed: "Download confirmed and submitted",
+    jobForceConfirmed: "Forced download submitted",
+    manualQueued: "Manual episode added to download queue",
+    actionFailed: "Action failed: {error}"
   }
 } as const;
 

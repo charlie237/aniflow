@@ -3,16 +3,15 @@ import { SettingsForm } from "@/components/settings-form";
 import { getSystemSettings } from "@/lib/db/repositories";
 import type { PublicSystemSettings } from "@/lib/db/types";
 import { getDictionary } from "@/lib/i18n/server";
-import type { OpenList115CheckResult } from "@/lib/openlist/client";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage({
   searchParams
 }: {
-  searchParams: Promise<{ check?: string; reset?: string }>;
+  searchParams: Promise<{ reset?: string }>;
 }) {
-  const { check, reset } = await searchParams;
+  const { reset } = await searchParams;
   const { t } = await getDictionary();
   const { openlistToken, tmdbBearerToken, ...rest } = getSystemSettings();
   const publicSettings: PublicSystemSettings = {
@@ -33,25 +32,11 @@ export default async function SettingsPage({
         </section>
         <SettingsForm
           settings={publicSettings}
-          checkResult={parseCheckResult(check)}
           resetStatus={parseResetStatus(reset)}
         />
       </div>
     </AppShell>
   );
-}
-
-function parseCheckResult(value: string | undefined): OpenList115CheckResult | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
-    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.checks)) {
-      return null;
-    }
-    return parsed as OpenList115CheckResult;
-  } catch {
-    return null;
-  }
 }
 
 function parseResetStatus(value: string | undefined) {

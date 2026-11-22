@@ -1,4 +1,5 @@
 import { getSystemSettings } from "@/lib/db/repositories";
+import { createT, getMessages, type TranslateFn } from "@/lib/i18n";
 import { joinRemotePath } from "@/lib/utils/path";
 
 export interface OpenListTask {
@@ -176,7 +177,10 @@ export async function listOpenListFiles(path: string, options?: { refresh?: bool
   });
 }
 
-export async function check115Connectivity(): Promise<OpenList115CheckResult> {
+export async function check115Connectivity(
+  translate?: TranslateFn
+): Promise<OpenList115CheckResult> {
+  const t = translate ?? createT(getMessages("zh-CN"));
   const settings = getSystemSettings();
   const checks: OpenList115CheckResult["checks"] = [];
   let tools: string[] | null = null;
@@ -186,7 +190,9 @@ export async function check115Connectivity(): Promise<OpenList115CheckResult> {
     checks.push({
       label: "OpenList API",
       ok: true,
-      message: me.username ? `Token 可用：${me.username}` : "Token 可用"
+      message: me.username
+        ? t("check.tokenOkUser", { user: me.username })
+        : t("check.tokenOk")
     });
   } catch (error) {
     checks.push({
@@ -201,7 +207,7 @@ export async function check115Connectivity(): Promise<OpenList115CheckResult> {
     tools = await openListGet<string[]>("/api/public/offline_download_tools");
   } catch (error) {
     checks.push({
-      label: "115 接入方式",
+      label: t("check.accessMode"),
       ok: false,
       message: errorMessage(error)
     });
@@ -210,25 +216,27 @@ export async function check115Connectivity(): Promise<OpenList115CheckResult> {
   try {
     const pathCheck = await checkOpenListSavePath(
       settings.openlistIncomingPath,
-      settings.openlist115Mode
+      settings.openlist115Mode,
+      t
     );
     const hasMode = tools?.includes(settings.openlist115Mode) ?? false;
 
     if (tools) {
       checks.push({
-        label: "115 接入方式",
+        label: t("check.accessMode"),
         ok: hasMode || pathCheck.providerMatchesMode,
         message: accessModeCheckMessage({
           mode: settings.openlist115Mode,
           tools,
           provider: pathCheck.provider,
-          providerMatchesMode: pathCheck.providerMatchesMode
+          providerMatchesMode: pathCheck.providerMatchesMode,
+          t
         })
       });
     }
 
     checks.push({
-      label: "下载目录",
+      label: t("check.incomingDir"),
       ok: pathCheck.ok,
       message: pathCheck.message
     });
@@ -236,19 +244,20 @@ export async function check115Connectivity(): Promise<OpenList115CheckResult> {
     if (tools) {
       const hasMode = tools.includes(settings.openlist115Mode);
       checks.push({
-        label: "115 接入方式",
+        label: t("check.accessMode"),
         ok: hasMode,
         message: accessModeCheckMessage({
           mode: settings.openlist115Mode,
           tools,
-          providerMatchesMode: false
+          providerMatchesMode: false,
+          t
         })
       });
     }
     checks.push({
-      label: "下载目录",
+      label: t("check.incomingDir"),
       ok: false,
-      message: savePathErrorMessage(settings.openlistIncomingPath, error)
+      message: savePathErrorMessage(settings.openlistIncomingPath, error, t)
     });
   }
 
@@ -426,7 +435,8 @@ function sleep(ms: number) {
 
 async function checkOpenListSavePath(
   path: string,
-  mode: "115 Cloud" | "115 Open"
+  mode: "115 Cloud" | "115 Open",
+  t: TranslateFn
 ) {
   const candidates = ancestorPaths(path);
   let lastError: unknown = null;
@@ -437,19 +447,27 @@ async function checkOpenListSavePath(
         write?: boolean;
         provider?: string;
         content?: unknown[];
-      }>("/api/fs/list", {
-        path: candidate,
-        page: 1,
-        per_page: 1,
-        refresh: true
-      });
+      }>(
+        "/api/fs/list",
+        {
+          path: candidate,
+          page: 1,
+          per_page: 1,
+          refresh: true
+        },
+        { retryable: true }
+      );
       const getResult = await openListRequest<{
         provider?: string;
         is_dir?: boolean;
         mount_details?: { driver?: string; name?: string; type?: string };
-      }>("/api/fs/get", {
-        path: candidate
-      });
+      }>(
+        "/api/fs/get",
+        {
+          path: candidate
+        },
+        { retryable: true }
+      );
       const provider =
         getResult.mount_details?.driver ??
         getResult.mount_details?.type ??
@@ -468,7 +486,8 @@ async function checkOpenListSavePath(
           canWrite,
           provider,
           mode,
-          providerMatchesMode
+          providerMatchesMode,
+          t
         })
       };
     } catch (error) {
@@ -485,14 +504,26 @@ function accessModeCheckMessage(params: {
   tools: string[];
   provider?: string;
   providerMatchesMode: boolean;
+  t: TranslateFn;
 }) {
+  const toolsText = params.tools.join(", ") || params.t("common.none");
   if (params.providerMatchesMode) {
-    const readyText = params.tools.includes(params.mode)
-      ? "OpenList ready 工具列表也包含该接入方式"
-      : `ready 工具列表只返回：${params.tools.join(", ") || "无"}`;
-    return `下载目录属于 ${params.provider} 挂载，可按 ${params.mode} 直接提交；${readyText}`;
+    if (params.tools.includes(params.mode)) {
+      return params.t("check.modeProviderReady", {
+        provider: params.provider ?? params.mode,
+        mode: params.mode
+      });
+    }
+    return params.t("check.modeProviderPartial", {
+      provider: params.provider ?? params.mode,
+      mode: params.mode,
+      tools: toolsText
+    });
   }
-  return `OpenList ready 工具未包含 ${params.mode}，当前 ready 工具：${params.tools.join(", ") || "无"}；请确认下载目录属于对应 115 挂载，或点击检测同步 OpenList 后台配置`;
+  return params.t("check.modeMissing", {
+    mode: params.mode,
+    tools: toolsText
+  });
 }
 
 function openListPathCheckMessage(params: {
@@ -502,24 +533,43 @@ function openListPathCheckMessage(params: {
   provider?: string;
   mode: "115 Cloud" | "115 Open";
   providerMatchesMode: boolean;
+  t: TranslateFn;
 }) {
-  const providerText = params.provider ? `，Provider: ${params.provider}` : "";
+  const providerText = params.provider ? ` (Provider: ${params.provider})` : "";
   if (!params.canWrite) {
-    return `${params.checkedPath} 可访问，但当前用户没有写权限${providerText}`;
+    return params.t("check.pathNoWrite", {
+      checkedPath: params.checkedPath,
+      provider: providerText
+    });
   }
   if (!params.providerMatchesMode) {
-    return `${params.checkedPath} 可访问且可写${providerText}，但当前选择的是 ${params.mode}；下载目录必须位于对应的 115 挂载下`;
+    return params.t("check.pathModeMismatch", {
+      checkedPath: params.checkedPath,
+      provider: providerText,
+      mode: params.mode
+    });
   }
   if (params.checkedPath !== params.path) {
-    return `${params.path} 还不存在；父目录 ${params.checkedPath} 可访问且可写${providerText}，离线任务会尝试创建下载目录`;
+    return params.t("check.pathParentReady", {
+      path: params.path,
+      checkedPath: params.checkedPath,
+      provider: providerText
+    });
   }
-  return `${params.path} 可访问且可写${providerText}`;
+  return params.t("check.pathReady", {
+    path: params.path,
+    provider: providerText
+  });
 }
 
-function savePathErrorMessage(path: string, error: unknown) {
+function savePathErrorMessage(
+  path: string,
+  error: unknown,
+  t: TranslateFn
+) {
   const message = errorMessage(error);
   if (isNotFoundError(error)) {
-    return `${path} 及其父目录在 OpenList 中不可访问：${message}。请确认第一段挂载名存在，例如 /115/Anime/_incoming 里的 /115 必须是 OpenList 里的 115 挂载`;
+    return t("check.pathNotFound", { path, message });
   }
   return message;
 }

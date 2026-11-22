@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { evaluateRules } from "@/lib/rules/engine";
+import { createT, getMessages } from "@/lib/i18n";
 import type { FilterRule, ReleaseMetadata } from "@/lib/db/types";
 
 const metadata: Omit<ReleaseMetadata, "id" | "feedItemId"> = {
@@ -71,5 +72,17 @@ describe("evaluateRules", () => {
         rule("language_allow", "简体内嵌")
       ]).allowed
     ).toBe(true);
+  });
+
+  it("localizes rejection reasons when a translator is supplied", () => {
+    const enT = createT(getMessages("en"));
+    const decision = evaluateRules(
+      "Test Anime",
+      metadata,
+      [rule("group_block", "GroupA")],
+      enT
+    );
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasons[0]).toBe("Subtitle group GroupA is blocked");
   });
 });

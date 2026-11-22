@@ -4,6 +4,7 @@ import {
   Archive,
   ArchiveRestore,
   ChevronDown,
+  Loader2,
   Pencil,
   Plus,
   Save,
@@ -11,7 +12,8 @@ import {
   X
 } from "lucide-react";
 import type { ChangeEvent, InputHTMLAttributes } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
+import { toast } from "sonner";
 import {
   archiveSubscriptionAction,
   createParsedSubscriptionAction,
@@ -178,7 +180,9 @@ function CreateFromPreview({ preview }: { preview: RssPreview }) {
   );
   const matchedRows = previewRows.filter((row) => row.downloadable);
   const hasFilters = facetKeys.some((key) => Boolean(filters[key]));
+  const [creating, startCreate] = useTransition();
   const canCreate =
+    !creating &&
     Boolean(name.trim()) &&
     Boolean(seasonNumber.trim()) &&
     Boolean(filters.releaseGroup) &&
@@ -186,9 +190,22 @@ function CreateFromPreview({ preview }: { preview: RssPreview }) {
     Boolean(filters.subtitleLanguage) &&
     matchedRows.length > 0;
 
+  function handleCreate(formData: FormData) {
+    startCreate(async () => {
+      const result = await createParsedSubscriptionAction(formData);
+      if (result.ok) {
+        toast.success(result.message ?? t("toast.subscriptionCreated"));
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
+
   return (
     <form
-      action={createParsedSubscriptionAction}
+      action={handleCreate}
       className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] p-3"
     >
       <input type="hidden" name="rssUrl" value={preview.url} />
@@ -263,7 +280,11 @@ function CreateFromPreview({ preview }: { preview: RssPreview }) {
           {t("subscription.autoDownload")}
         </label>
         <Button type="submit" variant="signal" disabled={!canCreate}>
-          <Plus className="size-4" />
+          {creating ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Plus className="size-4" />
+          )}
           {t("subscription.create")}
         </Button>
       </div>
@@ -380,6 +401,29 @@ function SubscriptionItem({
   onToggleEdit: () => void;
 }) {
   const { t } = useI18n();
+  const [togglingArchive, startToggleArchive] = useTransition();
+
+  function handleArchiveToggle(formData: FormData) {
+    startToggleArchive(async () => {
+      const action = subscription.enabled
+        ? archiveSubscriptionAction
+        : restoreSubscriptionAction;
+      const result = await action(formData);
+      if (result.ok) {
+        toast.success(
+          result.message ??
+            (subscription.enabled
+              ? t("toast.subscriptionArchived")
+              : t("toast.subscriptionRestored"))
+        );
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
+
   return (
     <div className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-muted)] p-3 text-sm shadow-[var(--shadow)] transition-colors hover:border-[var(--line-strong)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -397,20 +441,21 @@ function SubscriptionItem({
             {isEditing ? <X /> : <Pencil />}
             {isEditing ? t("common.collapse") : t("common.edit")}
           </Button>
-          <form
-            action={
-              subscription.enabled
-                ? archiveSubscriptionAction
-                : restoreSubscriptionAction
-            }
-          >
+          <form action={handleArchiveToggle}>
             <input type="hidden" name="id" value={subscription.id} />
             <Button
               type="submit"
               variant={subscription.enabled ? "outline" : "signal"}
               size="sm"
+              disabled={togglingArchive}
             >
-              {subscription.enabled ? <Archive /> : <ArchiveRestore />}
+              {togglingArchive ? (
+                <Loader2 className="animate-spin" />
+              ) : subscription.enabled ? (
+                <Archive />
+              ) : (
+                <ArchiveRestore />
+              )}
               {subscription.enabled ? t("subscription.archive") : t("subscription.restore")}
             </Button>
           </form>
@@ -422,7 +467,11 @@ function SubscriptionItem({
       </div>
       <SubscriptionSummary subscription={subscription} rules={rules} />
       {isEditing ? (
-        <EditSubscriptionForm subscription={subscription} rules={rules} />
+        <EditSubscriptionForm
+          subscription={subscription}
+          rules={rules}
+          onSaved={onToggleEdit}
+        />
       ) : null}
     </div>
   );
@@ -437,12 +486,24 @@ function DeleteSubscriptionDialog({
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  const [deleting, startDelete] = useTransition();
+
+  function handleDelete(formData: FormData) {
+    startDelete(async () => {
+      const result = await deleteSubscriptionAction(formData);
+      if (result.ok) {
+        toast.success(result.message ?? t("toast.subscriptionDeleted"));
+        setOpen(false);
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={setOpen}
-    >
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button type="button" variant="danger" size="sm">
           <Trash2 />
@@ -458,22 +519,23 @@ function DeleteSubscriptionDialog({
               : t("subscription.deleteConfirm", { name: subscription.name })}
           </DialogDescription>
         </DialogHeader>
-        <form
-          action={deleteSubscriptionAction}
-          className="grid gap-4"
-          onSubmit={() => setOpen(false)}
-        >
+        <form action={handleDelete} className="grid gap-4">
           <input type="hidden" name="id" value={subscription.id} />
           <div className="flex flex-wrap justify-end gap-2">
             <Button
               type="button"
               variant="outline"
+              disabled={deleting}
               onClick={() => setOpen(false)}
             >
               {t("common.cancel")}
             </Button>
-            <Button type="submit" variant="danger" disabled={deletionBlocked}>
-              <Trash2 />
+            <Button
+              type="submit"
+              variant="danger"
+              disabled={deletionBlocked || deleting}
+            >
+              {deleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
               {t("subscription.confirmDelete")}
             </Button>
           </div>
@@ -513,15 +575,33 @@ function RuleBadge({ label, value }: { label: string; value: string }) {
 
 function EditSubscriptionForm({
   subscription,
-  rules
+  rules,
+  onSaved
 }: {
   subscription: Subscription;
   rules: FilterRule[];
+  onSaved?: () => void;
 }) {
   const { t } = useI18n();
+  const [saving, startSave] = useTransition();
+
+  function handleSave(formData: FormData) {
+    startSave(async () => {
+      const result = await updateParsedSubscriptionAction(formData);
+      if (result.ok) {
+        toast.success(result.message ?? t("toast.subscriptionUpdated"));
+        onSaved?.();
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
+
   return (
     <form
-      action={updateParsedSubscriptionAction}
+      action={handleSave}
       className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] p-3"
     >
       <input type="hidden" name="id" value={subscription.id} />
@@ -578,8 +658,12 @@ function EditSubscriptionForm({
           />
           {t("subscription.autoDownload")}
         </label>
-        <Button type="submit" variant="signal">
-          <Save className="size-4" />
+        <Button type="submit" variant="signal" disabled={saving}>
+          {saving ? (
+            <Loader2 className="size-4 animate-spin" />
+          ) : (
+            <Save className="size-4" />
+          )}
           {t("subscription.save")}
         </Button>
       </div>

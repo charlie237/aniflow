@@ -59,10 +59,12 @@ const WORKER_TASK_FILTERS: WorkerTaskFilter[] = [
 
 export function WorkerTaskTable({
   pageData,
-  subscriptions
+  subscriptions,
+  hasActiveDownloads = false
 }: {
   pageData: DashboardData["workerTaskPage"];
   subscriptions: DashboardData["subscriptions"];
+  hasActiveDownloads?: boolean;
 }) {
   const { t, formatDateTime } = useI18n();
   const router = useRouter();
@@ -84,10 +86,11 @@ export function WorkerTaskTable({
   const hasActiveTasks = pageData.counts.active > 0;
 
   useEffect(() => {
-    if (!hasActiveTasks) return;
-    const timer = window.setInterval(() => router.refresh(), 3000);
+    if (!hasActiveTasks && !hasActiveDownloads) return;
+    const intervalMs = hasActiveTasks ? 3000 : 8000;
+    const timer = window.setInterval(() => router.refresh(), intervalMs);
     return () => window.clearInterval(timer);
-  }, [hasActiveTasks, router]);
+  }, [hasActiveTasks, hasActiveDownloads, router]);
 
   function updateWorkerTaskParams(
     updates: Partial<{
