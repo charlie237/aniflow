@@ -1,5 +1,6 @@
 services:
   web:
+    image: ${ANIFLOW_IMAGE:-ghcr.io/charlie237/aniflow:latest}
     build: .
     command: npm run start
     ports:
@@ -27,6 +28,7 @@ services:
     restart: unless-stopped
 
   worker:
+    image: ${ANIFLOW_IMAGE:-ghcr.io/charlie237/aniflow:latest}
     build: .
     command: node dist/worker.mjs
     env_file:

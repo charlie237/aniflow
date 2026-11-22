@@ -75,8 +75,17 @@ RSS 抓取仅在 **后台设置** 中开启代理开关后才会使用配置的�
 
 ## Docker
 
+直接从 GHCR 拉取预构建的多架构镜像（支持 `linux/amd64` 与 `linux/arm64`）：
+
 ```bash
 cp .env.example .env
+docker compose pull
+docker compose up -d
+```
+
+或本地自行构建：
+
+```bash
 docker compose up --build
 ```
 

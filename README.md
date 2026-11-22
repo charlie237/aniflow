@@ -75,8 +75,17 @@ Active subscriptions can be **archived** (stop tracking) or restored later. Dele
 
 ## Docker
 
+Pull the prebuilt multi-arch image (`linux/amd64`, `linux/arm64`) from GHCR:
+
 ```bash
 cp .env.example .env
+docker compose pull
+docker compose up -d
+```
+
+Or build locally:
+
+```bash
 docker compose up --build
 ```
 
