@@ -6,6 +6,7 @@ import {
   isAlreadyInOfflineListErrorMessage,
   isOfflineTaskFailed,
   isOfflineTaskSucceeded,
+  listOpenListFiles,
   moveOpenListFiles,
   removeOpenListFiles
 } from "@/lib/openlist/client";
@@ -208,5 +209,46 @@ describe("OpenList client", () => {
         error: ""
       })
     ).toBe(false);
+  });
+
+  it("retries transient 5xx failures on idempotent read requests", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        json: async () => ({ code: 502, message: "Bad Gateway" })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          code: 200,
+          data: { content: [{ name: "ep01.mkv", size: 100, is_dir: false }] }
+        })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const files = await listOpenListFiles("/115/Anime/_incoming/jobs/1");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(files).toHaveLength(1);
+    expect(files[0]?.name).toBe("ep01.mkv");
+  });
+
+  it("does not retry non-idempotent offline download submission on 5xx", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({ code: 503, message: "Service Unavailable" })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      add115OfflineDownload({
+        urls: ["magnet:?xt=urn:btih:abc"],
+        path: "/115/Anime/_incoming/jobs/1"
+      })
+    ).rejects.toThrow("Service Unavailable");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

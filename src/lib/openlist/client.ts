@@ -35,6 +35,8 @@ export interface OpenList115CheckResult {
 
 const DEFAULT_DELETE_POLICY = "delete_never";
 const OPENLIST_REQUEST_TIMEOUT_MS = 30_000;
+const OPENLIST_READ_MAX_RETRIES = 2;
+const OPENLIST_RETRY_BASE_MS = process.env.VITEST ? 1 : 250;
 
 export async function add115OfflineDownload(params: {
   urls: string[];
@@ -151,12 +153,16 @@ export async function listOpenListFiles(path: string, options?: { refresh?: bool
       is_dir?: boolean;
       modified?: string;
     }>;
-  }>("/api/fs/list", {
-    path,
-    page: 1,
-    per_page: 0,
-    refresh: options?.refresh ?? true
-  });
+  }>(
+    "/api/fs/list",
+    {
+      path,
+      page: 1,
+      per_page: 0,
+      refresh: options?.refresh ?? true
+    },
+    { retryable: true }
+  );
 
   return (payload.content ?? []).map((entry): OpenListFileEntry => {
     const name = String(entry.name ?? "");
@@ -309,21 +315,27 @@ export async function renameOpenListFile(params: {
 
 async function openListRequest<TData = unknown>(
   endpoint: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  options?: { retryable?: boolean }
 ): Promise<TData> {
-  return openListFetch(endpoint, {
-    method: "POST",
-    body: JSON.stringify(body)
-  });
+  return openListFetch(
+    endpoint,
+    {
+      method: "POST",
+      body: JSON.stringify(body)
+    },
+    options
+  );
 }
 
 async function openListGet<TData = unknown>(endpoint: string): Promise<TData> {
-  return openListFetch(endpoint, { method: "GET" });
+  return openListFetch(endpoint, { method: "GET" }, { retryable: true });
 }
 
 async function openListFetch<TData = unknown>(
   endpoint: string,
-  init: RequestInit
+  init: RequestInit,
+  options?: { retryable?: boolean }
 ): Promise<TData> {
   const settings = getSystemSettings();
   if (!settings.openlistBaseUrl) {
@@ -332,33 +344,84 @@ async function openListFetch<TData = unknown>(
   if (!settings.openlistToken) {
     throw new Error("OpenList token is not configured");
   }
+  const baseUrl = parseOpenListBaseUrl(settings.openlistBaseUrl);
 
-  const response = await fetch(`${settings.openlistBaseUrl}${endpoint}`, {
-    ...init,
-    signal: AbortSignal.timeout(OPENLIST_REQUEST_TIMEOUT_MS),
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: settings.openlistToken,
-      ...init.headers
-    }
-  });
+  const maxAttempts = options?.retryable ? OPENLIST_READ_MAX_RETRIES + 1 : 1;
+  let lastError: unknown;
 
-  const payload = (await response.json().catch(() => null)) as
-    | {
-        code?: number;
-        message?: string;
-        data?: TData;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const response = await fetch(`${baseUrl}${endpoint}`, {
+        ...init,
+        signal: AbortSignal.timeout(OPENLIST_REQUEST_TIMEOUT_MS),
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: settings.openlistToken,
+          ...init.headers
+        }
+      });
+
+      if (
+        attempt < maxAttempts &&
+        (response.status === 429 || response.status >= 500)
+      ) {
+        await sleep(OPENLIST_RETRY_BASE_MS * attempt);
+        continue;
       }
-    | null;
 
-  if (!response.ok || payload?.code !== 200) {
-    throw new Error(
-      payload?.message ||
-        `OpenList request ${endpoint} failed (${response.status})`
-    );
+      const payload = (await response.json().catch(() => null)) as
+        | {
+            code?: number;
+            message?: string;
+            data?: TData;
+          }
+        | null;
+
+      if (!response.ok || payload?.code !== 200) {
+        throw new Error(
+          payload?.message ||
+            `OpenList request ${endpoint} failed (${response.status})`
+        );
+      }
+
+      return (payload.data ?? null) as TData;
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts && isRetryableNetworkError(error)) {
+        await sleep(OPENLIST_RETRY_BASE_MS * attempt);
+        continue;
+      }
+      throw error;
+    }
   }
 
-  return (payload.data ?? null) as TData;
+  throw lastError;
+}
+
+function parseOpenListBaseUrl(raw: string) {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error("OpenList base URL must be a valid http(s) URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("OpenList base URL must use http:// or https://");
+  }
+  return raw.replace(/\/+$/, "");
+}
+
+function isRetryableNetworkError(error: unknown) {
+  if (!(error instanceof Error)) return false;
+  if (error.name === "TimeoutError" || error.name === "AbortError") return true;
+  if (error instanceof TypeError) return true;
+  return /fetch failed|network|socket|econnreset|econnrefused|etimedout|offline/i.test(
+    error.message
+  );
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 async function checkOpenListSavePath(

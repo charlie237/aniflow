@@ -24,7 +24,32 @@ describe("Mikan URL policy", () => {
     expect(
       isMikanDownloadUrl("https://mikanani.me/RSS/Download/episode.torrent")
     ).toBe(true);
+    expect(isMikanDownloadUrl("https://mikanime.tv/Download/episode.torrent")).toBe(
+      true
+    );
     expect(isMikanDownloadUrl("https://example.com/episode.torrent")).toBe(false);
     expect(isMikanDownloadUrl("https://mikanani.me/Home/Episode/1")).toBe(false);
+  });
+
+  it("supports mikanime.tv and MIKAN_ALLOWED_HOSTS mirrors", () => {
+    expect(isMikanRssUrl("https://mikanime.tv/RSS/Bangumi?bangumiId=3980")).toBe(
+      true
+    );
+    const previous = process.env.MIKAN_ALLOWED_HOSTS;
+    process.env.MIKAN_ALLOWED_HOSTS = "mikan.mirror.example";
+    try {
+      expect(
+        isMikanRssUrl("https://mikan.mirror.example/RSS/Bangumi?bangumiId=1")
+      ).toBe(true);
+      expect(
+        isMikanDownloadUrl("https://mikan.mirror.example/Download/ep.torrent")
+      ).toBe(true);
+      expect(
+        isMikanRssUrl("https://evil.example/RSS/Bangumi?bangumiId=1")
+      ).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.MIKAN_ALLOWED_HOSTS;
+      else process.env.MIKAN_ALLOWED_HOSTS = previous;
+    }
   });
 });

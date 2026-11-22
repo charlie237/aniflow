@@ -1,4 +1,5 @@
 import { XMLParser } from "fast-xml-parser";
+import { isMikanDownloadUrl } from "@/lib/net/url-policy";
 import { parseReleaseTitle, type ParsedReleaseTitle } from "@/lib/rss/title-parser";
 import { toStoredUtcIso } from "@/lib/time";
 
@@ -114,7 +115,7 @@ function looksLikeDownloadUrl(value: string) {
     value.startsWith("magnet:?") ||
     /\.torrent(?:\?|$)/i.test(value) ||
     /\/RSS\/Download\//i.test(value) ||
-    /mikanani\.me\/Download\//i.test(value)
+    isMikanDownloadUrl(value)
   );
 }
 

@@ -1141,19 +1141,26 @@ async function organizeJobFile(
       errorMessage: null
     });
   } catch (error) {
-    const message = contextualError("Organize downloaded file failed", error, {
-      sourcePath: file.path,
-      targetPath: finalPath
-    });
+    const renamedBeforeFailure = currentPath !== file.path;
+    const message = contextualError(
+      renamedBeforeFailure
+        ? "Organize downloaded file failed after rename"
+        : "Organize downloaded file failed",
+      error,
+      {
+        sourcePath: currentPath,
+        targetPath: finalPath
+      }
+    );
     updateJobStatus(job.id, "failed", {
-      targetPath: file.path,
+      targetPath: currentPath,
       errorMessage: message
     });
     upsertEpisodeFile({
       subscriptionId: subscription.id,
       feedItemId,
       episodeNumber: expectedEpisodeNumber,
-      originalPath: file.path,
+      originalPath: currentPath,
       finalPath,
       sizeBytes: file.size,
       status: "failed",

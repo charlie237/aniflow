@@ -1,4 +1,12 @@
-const MIKAN_HOST = "mikanani.me";
+const DEFAULT_MIKAN_HOSTS = ["mikanani.me", "mikanime.tv"];
+
+function allowedMikanHosts() {
+  const extra = (process.env.MIKAN_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((host) => host.trim().toLowerCase().replace(/\.$/, ""))
+    .filter(Boolean);
+  return [...DEFAULT_MIKAN_HOSTS, ...extra];
+}
 
 export function isMikanRssUrl(value: string) {
   const url = parseMikanUrl(value);
@@ -14,7 +22,9 @@ export function isMikanDownloadUrl(value: string) {
 
 export function assertMikanRssUrl(value: string) {
   if (!isMikanRssUrl(value)) {
-    throw new Error("Only Mikan RSS URLs under mikanani.me/RSS/ are allowed");
+    throw new Error(
+      "Only Mikan RSS URLs under mikanani.me/RSS/ or allowed Mikan mirrors are allowed"
+    );
   }
   return new URL(value);
 }
@@ -22,7 +32,7 @@ export function assertMikanRssUrl(value: string) {
 export function assertMikanDownloadUrl(value: string) {
   if (!isMikanDownloadUrl(value)) {
     throw new Error(
-      "Only Mikan torrent URLs under mikanani.me/Download/ are allowed"
+      "Only Mikan torrent URLs under mikanani.me/Download/ or allowed Mikan mirrors are allowed"
     );
   }
   return new URL(value);
@@ -33,7 +43,12 @@ function parseMikanUrl(value: string) {
     const url = new URL(value);
     if (url.protocol !== "https:") return null;
     const hostname = url.hostname.toLowerCase().replace(/\.$/, "");
-    if (hostname !== MIKAN_HOST && !hostname.endsWith(`.${MIKAN_HOST}`)) {
+    const allowed = allowedMikanHosts();
+    if (
+      !allowed.some(
+        (host) => hostname === host || hostname.endsWith(`.${host}`)
+      )
+    ) {
       return null;
     }
     return url;

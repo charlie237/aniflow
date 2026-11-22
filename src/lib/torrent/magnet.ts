@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { fetchBytes } from "@/lib/net/fetch";
-import { assertMikanDownloadUrl } from "@/lib/net/url-policy";
+import { assertMikanDownloadUrl, isMikanDownloadUrl } from "@/lib/net/url-policy";
 
 type BencodeValue = Buffer | number | BencodeList | BencodeDict;
 
@@ -84,7 +84,7 @@ function normalizeBtih(value: string) {
 }
 
 function looksLikeTorrentUrl(url: string) {
-  return /\.torrent(?:[?#]|$)/i.test(url) || /mikanani\.me\/Download\//i.test(url);
+  return /\.torrent(?:[?#]|$)/i.test(url) || isMikanDownloadUrl(url);
 }
 
 function parseTorrent(buffer: Buffer) {
