@@ -353,6 +353,26 @@ const zhCN = {
     downloadTimeoutHelp:
       "任务处于「下载中」超过该时间且未整理完成时，标记为失败。默认 30 分钟。",
     save: "保存设置",
+    mediaServerTitle: "媒体库自动刷新",
+    mediaServerDescription:
+      "新集整理入库后自动通知 Plex / Jellyfin / Emby 扫描媒体库。",
+    mediaServerType: "媒体服务器",
+    mediaServerNone: "不启用",
+    mediaServerUrl: "服务器地址",
+    mediaServerToken: "API Key / Token",
+    mediaServerLibraryId: "媒体库 / 分区 ID（可选）",
+    mediaServerLibraryIdPlaceholder: "留空则刷新全部媒体库",
+    mediaServerLibraryIdHelp:
+      "Plex 填分区编号（如 2），Jellyfin/Emby 填库 Item ID；留空触发全库刷新。",
+    testMediaServer: "保存并测试刷新",
+    notifyTitle: "事件通知",
+    notifyDescription:
+      "在入库完成、任务失败或需要人工确认时推送消息（支持 Webhook、Telegram、Bark）。",
+    notifyOnCompleted: "新集入库成功",
+    notifyOnFailed: "下载 / 整理失败",
+    notifyOnNeedsReview: "需人工确认（未解析集号）",
+    barkServerUrl: "Bark 服务器地址",
+    testNotification: "保存并发送测试通知",
     maintenanceTitle: "维护",
     maintenanceDescription:
       "清空 RSS 抓取结果、解析元数据、下载队列和文件扫描记录；保留后台设置、订阅和筛选规则。",
@@ -415,6 +435,10 @@ const zhCN = {
     jobConfirmed: "已确认并提交下载",
     jobForceConfirmed: "已强制提交下载",
     manualQueued: "已加入离线下载队列",
+    mediaServerTestOk: "已触发媒体库刷新",
+    mediaServerNotConfigured: "请先选择媒体服务器并填写地址和 Token",
+    notificationTestOk: "测试通知已发送：{channels}",
+    notificationNotConfigured: "请先启用并填写至少一个通知通道",
     actionFailed: "操作失败：{error}"
   }
 } as const;

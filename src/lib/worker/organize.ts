@@ -24,6 +24,8 @@ import {
   renameOpenListFile,
   type OpenListFileEntry
 } from "@/lib/openlist/client";
+import { triggerMediaServerRefresh } from "@/lib/media-server/refresh";
+import { sendNotification } from "@/lib/notifications/notifier";
 import { parseReleaseTitle } from "@/lib/rss/title-parser";
 import {
   buildEpisodePath,
@@ -404,6 +406,21 @@ async function organizeJobFile(
       targetPath: finalPath,
       errorMessage: null
     });
+    const epLabel = `S${String(subscription.seasonNumber).padStart(2, "0")}E${String(expectedEpisodeNumber).padStart(2, "0")}`;
+    await Promise.all([
+      triggerMediaServerRefresh(),
+      sendNotification({
+        type: "episode_completed",
+        title: `Aniflow · ${subscription.name} ${epLabel}`,
+        body: finalPath,
+        details: {
+          subscription: subscription.name,
+          season: subscription.seasonNumber,
+          episode: expectedEpisodeNumber,
+          path: finalPath
+        }
+      })
+    ]);
   } catch (error) {
     const renamedBeforeFailure = currentPath !== file.path;
     const message = contextualError(
@@ -429,6 +446,12 @@ async function organizeJobFile(
       sizeBytes: file.size,
       status: "failed",
       errorMessage: message
+    });
+    await sendNotification({
+      type: "job_failed",
+      title: `Aniflow · Organize failed (${subscription.name})`,
+      body: message,
+      details: { jobId: job.id, subscription: subscription.name }
     });
   }
 }

@@ -33,6 +33,8 @@ import {
   ensureOpenListDirectory,
   type OpenList115CheckResult
 } from "@/lib/openlist/client";
+import { triggerMediaServerRefresh } from "@/lib/media-server/refresh";
+import { sendNotification } from "@/lib/notifications/notifier";
 import { getDictionary } from "@/lib/i18n/server";
 import { RUNTIME_RESET_CONFIRM_PHRASE } from "@/lib/runtime-reset";
 import { toBool } from "@/lib/utils";
@@ -116,7 +118,22 @@ const settingsSchema = z.object({
   proxyUrl: optionalProxyUrlSchema,
   tmdbBearerToken: z.string().optional().default(""),
   workerIntervalSeconds: z.coerce.number().int().min(30).max(86400),
-  downloadTimeoutMinutes: z.coerce.number().int().min(1).max(24 * 60)
+  downloadTimeoutMinutes: z.coerce.number().int().min(1).max(24 * 60),
+  mediaServerType: z.enum(["none", "jellyfin", "emby", "plex"]).default("none"),
+  mediaServerUrl: optionalHttpUrlSchema,
+  mediaServerToken: z.string().optional().default(""),
+  mediaServerLibraryId: z.string().trim().optional().default(""),
+  webhookEnabled: z.boolean().default(false),
+  webhookUrl: optionalHttpUrlSchema,
+  telegramEnabled: z.boolean().default(false),
+  telegramBotToken: z.string().optional().default(""),
+  telegramChatId: z.string().trim().optional().default(""),
+  barkEnabled: z.boolean().default(false),
+  barkServerUrl: optionalHttpUrlSchema,
+  barkDeviceKey: z.string().optional().default(""),
+  notifyOnCompleted: z.boolean().default(true),
+  notifyOnFailed: z.boolean().default(true),
+  notifyOnNeedsReview: z.boolean().default(true)
 });
 
 const manualEpisodeSchema = z.object({
@@ -628,6 +645,62 @@ export async function check115ConnectivityAction(
   }
 }
 
+export async function testMediaServerAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const parsed = parseSettingsForm(formData);
+    saveSystemSettings(parsed);
+    const result = await triggerMediaServerRefresh();
+    revalidatePath("/settings");
+    if (result.error) {
+      return { ok: false, error: result.error };
+    }
+    if (!result.triggered) {
+      return { ok: false, error: t("toast.mediaServerNotConfigured") };
+    }
+    return { ok: true, message: t("toast.mediaServerTestOk") };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function testNotificationAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const parsed = parseSettingsForm(formData);
+    saveSystemSettings(parsed);
+    const result = await sendNotification({
+      type: "test",
+      title: "Aniflow · Test notification",
+      body: "Notification channels are configured and working."
+    });
+    revalidatePath("/settings");
+    if (result.sent.length === 0 && result.failed.length === 0) {
+      return { ok: false, error: t("toast.notificationNotConfigured") };
+    }
+    if (result.failed.length > 0) {
+      return {
+        ok: false,
+        error: result.failed
+          .map((item) => `${item.channel}: ${item.error}`)
+          .join("; ")
+      };
+    }
+    return {
+      ok: true,
+      message: t("toast.notificationTestOk", {
+        channels: result.sent.join(", ")
+      })
+    };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
 export async function resetRuntimeDataAction(formData: FormData) {
   const typed = String(formData.get("confirmRuntimeReset") ?? "").trim();
   if (typed !== RUNTIME_RESET_CONFIRM_PHRASE) {
@@ -666,6 +739,24 @@ function parseSettingsForm(formData: FormData): SystemSettings {
     ? ""
     : submittedTmdbToken || existing.tmdbBearerToken;
 
+  const submittedMediaServerToken =
+    formData.get("mediaServerToken")?.toString().trim() ?? "";
+  const mediaServerToken = toBool(formData.get("clearMediaServerToken"))
+    ? ""
+    : submittedMediaServerToken || existing.mediaServerToken;
+
+  const submittedTelegramToken =
+    formData.get("telegramBotToken")?.toString().trim() ?? "";
+  const telegramBotToken = toBool(formData.get("clearTelegramBotToken"))
+    ? ""
+    : submittedTelegramToken || existing.telegramBotToken;
+
+  const submittedBarkKey =
+    formData.get("barkDeviceKey")?.toString().trim() ?? "";
+  const barkDeviceKey = toBool(formData.get("clearBarkDeviceKey"))
+    ? ""
+    : submittedBarkKey || existing.barkDeviceKey;
+
   const parsed = settingsSchema.parse({
     openlistBaseUrl: formData.get("openlistBaseUrl")?.toString() ?? "",
     openlistToken,
@@ -683,7 +774,23 @@ function parseSettingsForm(formData: FormData): SystemSettings {
     proxyUrl: formData.get("proxyUrl")?.toString() ?? "http://127.0.0.1:7890",
     tmdbBearerToken,
     workerIntervalSeconds: formData.get("workerIntervalSeconds") ?? 300,
-    downloadTimeoutMinutes: formData.get("downloadTimeoutMinutes") ?? 30
+    downloadTimeoutMinutes: formData.get("downloadTimeoutMinutes") ?? 30,
+    mediaServerType: formData.get("mediaServerType")?.toString() ?? "none",
+    mediaServerUrl: formData.get("mediaServerUrl")?.toString() ?? "",
+    mediaServerToken,
+    mediaServerLibraryId: formData.get("mediaServerLibraryId")?.toString() ?? "",
+    webhookEnabled: toBool(formData.get("webhookEnabled")),
+    webhookUrl: formData.get("webhookUrl")?.toString() ?? "",
+    telegramEnabled: toBool(formData.get("telegramEnabled")),
+    telegramBotToken,
+    telegramChatId: formData.get("telegramChatId")?.toString() ?? "",
+    barkEnabled: toBool(formData.get("barkEnabled")),
+    barkServerUrl:
+      formData.get("barkServerUrl")?.toString() || "https://api.day.app",
+    barkDeviceKey,
+    notifyOnCompleted: toBool(formData.get("notifyOnCompleted")),
+    notifyOnFailed: toBool(formData.get("notifyOnFailed")),
+    notifyOnNeedsReview: toBool(formData.get("notifyOnNeedsReview"))
   }) satisfies SystemSettings;
   return parsed;
 }

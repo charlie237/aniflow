@@ -1,7 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import { getDb } from "@/lib/db/client";
 import { settings } from "@/lib/db/schema";
-import type { SystemSettings, WorkerHealth } from "@/lib/db/types";
+import type { MediaServerType, SystemSettings, WorkerHealth } from "@/lib/db/types";
 import { parseToUtcDate } from "@/lib/time";
 
 export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
@@ -17,7 +17,22 @@ export const DEFAULT_SYSTEM_SETTINGS: SystemSettings = {
   proxyUrl: "http://127.0.0.1:7890",
   tmdbBearerToken: "",
   workerIntervalSeconds: 300,
-  downloadTimeoutMinutes: 30
+  downloadTimeoutMinutes: 30,
+  mediaServerType: "none",
+  mediaServerUrl: "",
+  mediaServerToken: "",
+  mediaServerLibraryId: "",
+  webhookEnabled: false,
+  webhookUrl: "",
+  telegramEnabled: false,
+  telegramBotToken: "",
+  telegramChatId: "",
+  barkEnabled: false,
+  barkServerUrl: "https://api.day.app",
+  barkDeviceKey: "",
+  notifyOnCompleted: true,
+  notifyOnFailed: true,
+  notifyOnNeedsReview: true
 };
 
 export function getSystemSettings(): SystemSettings {
@@ -62,7 +77,30 @@ export function getSystemSettings(): SystemSettings {
             DEFAULT_SYSTEM_SETTINGS.downloadTimeoutMinutes
         ) || DEFAULT_SYSTEM_SETTINGS.downloadTimeoutMinutes
       )
-    )
+    ),
+    mediaServerType: normalizeMediaServerType(values.get("mediaServerType")),
+    mediaServerUrl:
+      values.get("mediaServerUrl") ?? DEFAULT_SYSTEM_SETTINGS.mediaServerUrl,
+    mediaServerToken:
+      values.get("mediaServerToken") ?? DEFAULT_SYSTEM_SETTINGS.mediaServerToken,
+    mediaServerLibraryId:
+      values.get("mediaServerLibraryId") ??
+      DEFAULT_SYSTEM_SETTINGS.mediaServerLibraryId,
+    webhookEnabled: boolSetting(values.get("webhookEnabled"), false),
+    webhookUrl: values.get("webhookUrl") ?? DEFAULT_SYSTEM_SETTINGS.webhookUrl,
+    telegramEnabled: boolSetting(values.get("telegramEnabled"), false),
+    telegramBotToken:
+      values.get("telegramBotToken") ?? DEFAULT_SYSTEM_SETTINGS.telegramBotToken,
+    telegramChatId:
+      values.get("telegramChatId") ?? DEFAULT_SYSTEM_SETTINGS.telegramChatId,
+    barkEnabled: boolSetting(values.get("barkEnabled"), false),
+    barkServerUrl:
+      values.get("barkServerUrl") ?? DEFAULT_SYSTEM_SETTINGS.barkServerUrl,
+    barkDeviceKey:
+      values.get("barkDeviceKey") ?? DEFAULT_SYSTEM_SETTINGS.barkDeviceKey,
+    notifyOnCompleted: boolSetting(values.get("notifyOnCompleted"), true),
+    notifyOnFailed: boolSetting(values.get("notifyOnFailed"), true),
+    notifyOnNeedsReview: boolSetting(values.get("notifyOnNeedsReview"), true)
   };
 }
 
@@ -183,12 +221,36 @@ function normalizeSystemSettings(input: SystemSettings): SystemSettings {
     downloadTimeoutMinutes: Math.min(
       24 * 60,
       Math.max(1, Number(input.downloadTimeoutMinutes || 30))
-    )
+    ),
+    mediaServerType: normalizeMediaServerType(input.mediaServerType),
+    mediaServerUrl: trimTrailingSlash((input.mediaServerUrl ?? "").trim()),
+    mediaServerToken: (input.mediaServerToken ?? "").trim(),
+    mediaServerLibraryId: (input.mediaServerLibraryId ?? "").trim(),
+    webhookEnabled: Boolean(input.webhookEnabled),
+    webhookUrl: (input.webhookUrl ?? "").trim(),
+    telegramEnabled: Boolean(input.telegramEnabled),
+    telegramBotToken: (input.telegramBotToken ?? "").trim(),
+    telegramChatId: (input.telegramChatId ?? "").trim(),
+    barkEnabled: Boolean(input.barkEnabled),
+    barkServerUrl: trimTrailingSlash(
+      (input.barkServerUrl ?? "").trim() || DEFAULT_SYSTEM_SETTINGS.barkServerUrl
+    ),
+    barkDeviceKey: (input.barkDeviceKey ?? "").trim(),
+    notifyOnCompleted: input.notifyOnCompleted !== false,
+    notifyOnFailed: input.notifyOnFailed !== false,
+    notifyOnNeedsReview: input.notifyOnNeedsReview !== false
   };
 }
 
 function normalize115Mode(value: unknown): SystemSettings["openlist115Mode"] {
   return value === "115 Open" ? "115 Open" : "115 Cloud";
+}
+
+function normalizeMediaServerType(value: unknown): MediaServerType {
+  if (value === "jellyfin" || value === "emby" || value === "plex") {
+    return value;
+  }
+  return "none";
 }
 
 function trimTrailingSlash(value: string) {

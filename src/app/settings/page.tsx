@@ -13,11 +13,21 @@ export default async function SettingsPage({
 }) {
   const { reset } = await searchParams;
   const { t } = await getDictionary();
-  const { openlistToken, tmdbBearerToken, ...rest } = getSystemSettings();
+  const {
+    openlistToken,
+    tmdbBearerToken,
+    mediaServerToken,
+    telegramBotToken,
+    barkDeviceKey,
+    ...rest
+  } = getSystemSettings();
   const publicSettings: PublicSystemSettings = {
     ...rest,
     hasOpenlistToken: Boolean(openlistToken),
-    hasTmdbBearerToken: Boolean(tmdbBearerToken)
+    hasTmdbBearerToken: Boolean(tmdbBearerToken),
+    hasMediaServerToken: Boolean(mediaServerToken),
+    hasTelegramBotToken: Boolean(telegramBotToken),
+    hasBarkDeviceKey: Boolean(barkDeviceKey)
   };
   return (
     <AppShell>

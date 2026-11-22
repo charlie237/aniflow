@@ -227,6 +227,8 @@ export interface DashboardEpisodePage {
   seasonOptions: number[];
 }
 
+export type MediaServerType = "none" | "jellyfin" | "emby" | "plex";
+
 export interface SystemSettings {
   openlistBaseUrl: string;
   openlistToken: string;
@@ -242,15 +244,37 @@ export interface SystemSettings {
   workerIntervalSeconds: number;
   /** Minutes a job may stay in "downloading" before being marked failed. */
   downloadTimeoutMinutes: number;
+  mediaServerType: MediaServerType;
+  mediaServerUrl: string;
+  mediaServerToken: string;
+  mediaServerLibraryId: string;
+  webhookEnabled: boolean;
+  webhookUrl: string;
+  telegramEnabled: boolean;
+  telegramBotToken: string;
+  telegramChatId: string;
+  barkEnabled: boolean;
+  barkServerUrl: string;
+  barkDeviceKey: string;
+  notifyOnCompleted: boolean;
+  notifyOnFailed: boolean;
+  notifyOnNeedsReview: boolean;
 }
 
 /** Client-safe projection of SystemSettings without plaintext secret tokens. */
 export type PublicSystemSettings = Omit<
   SystemSettings,
-  "openlistToken" | "tmdbBearerToken"
+  | "openlistToken"
+  | "tmdbBearerToken"
+  | "mediaServerToken"
+  | "telegramBotToken"
+  | "barkDeviceKey"
 > & {
   hasOpenlistToken: boolean;
   hasTmdbBearerToken: boolean;
+  hasMediaServerToken: boolean;
+  hasTelegramBotToken: boolean;
+  hasBarkDeviceKey: boolean;
 };
 
 export interface DashboardData {

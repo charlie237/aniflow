@@ -368,6 +368,26 @@ const en = {
     downloadTimeoutHelp:
       "Jobs stuck in “Downloading” longer than this without finishing organize are marked failed. Default 30 minutes.",
     save: "Save settings",
+    mediaServerTitle: "Media server auto-refresh",
+    mediaServerDescription:
+      "Automatically notify Plex / Jellyfin / Emby to scan when a new episode is organized.",
+    mediaServerType: "Media server",
+    mediaServerNone: "Disabled",
+    mediaServerUrl: "Server URL",
+    mediaServerToken: "API Key / Token",
+    mediaServerLibraryId: "Library / Section ID (optional)",
+    mediaServerLibraryIdPlaceholder: "Leave blank to refresh all libraries",
+    mediaServerLibraryIdHelp:
+      "Plex section ID (e.g. 2) or Jellyfin/Emby library item ID; leave blank to refresh everything.",
+    testMediaServer: "Save & test refresh",
+    notifyTitle: "Notifications",
+    notifyDescription:
+      "Send alerts on episode completion, failures, or items needing review (Webhook, Telegram, Bark).",
+    notifyOnCompleted: "Episode organized",
+    notifyOnFailed: "Download / organize failed",
+    notifyOnNeedsReview: "Needs manual review",
+    barkServerUrl: "Bark server URL",
+    testNotification: "Save & send test",
     maintenanceTitle: "Maintenance",
     maintenanceDescription:
       "Clear RSS poll results, parsed metadata, download jobs, and file-scan records. Settings, subscriptions, and filter rules are kept.",
@@ -440,6 +460,10 @@ const en = {
     jobConfirmed: "Download confirmed and submitted",
     jobForceConfirmed: "Forced download submitted",
     manualQueued: "Manual episode added to download queue",
+    mediaServerTestOk: "Triggered media server library refresh",
+    mediaServerNotConfigured: "Select a media server and configure URL & token first",
+    notificationTestOk: "Test notification sent via: {channels}",
+    notificationNotConfigured: "Enable and configure at least one notification channel first",
     actionFailed: "Action failed: {error}"
   }
 } as const;

@@ -14,6 +14,7 @@ import {
   upsertFeedItem
 } from "@/lib/db/repositories";
 import { fetchText } from "@/lib/net/fetch";
+import { sendNotification } from "@/lib/notifications/notifier";
 import { parseRss } from "@/lib/rss/parser";
 import { evaluateRules } from "@/lib/rules/engine";
 import { runDownloadMaintenance } from "@/lib/worker/download";
@@ -350,15 +351,22 @@ async function pollSubscriptionFeed(
     }
 
     if (metadata.needsReview || metadata.episodeNumber == null || effectiveEpisode == null) {
+      const errorMessage =
+        metadata.episodeNumber != null && effectiveEpisode == null
+          ? `Episode ${metadata.episodeNumber} with offset ${subscription.episodeOffset} produces an invalid episode number`
+          : "Episode number could not be parsed";
       createOrUpdateJob({
         subscriptionId: subscription.id,
         feedItemId: feedItem.id,
         status: "needs_review",
         sourceUrl: candidate.downloadUrl,
-        errorMessage:
-          metadata.episodeNumber != null && effectiveEpisode == null
-            ? `Episode ${metadata.episodeNumber} with offset ${subscription.episodeOffset} produces an invalid episode number`
-            : "Episode number could not be parsed"
+        errorMessage
+      });
+      await sendNotification({
+        type: "needs_review",
+        title: `Aniflow · Needs review (${subscription.name})`,
+        body: `${feedItem.title} — ${errorMessage}`,
+        details: { subscription: subscription.name, feedItemId: feedItem.id }
       });
       result.skipped += 1;
       continue;

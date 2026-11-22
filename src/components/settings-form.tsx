@@ -1,11 +1,13 @@
 "use client";
 
-import { Loader2, Save } from "lucide-react";
+import { Bell, Loader2, RefreshCw, Save } from "lucide-react";
 import { useState, useTransition, type InputHTMLAttributes } from "react";
 import { toast } from "sonner";
 import {
   check115ConnectivityAction,
-  saveSettingsAction
+  saveSettingsAction,
+  testMediaServerAction,
+  testNotificationAction
 } from "@/app/actions";
 import { useI18n } from "@/components/locale-provider";
 import { ResetRuntimeDialog } from "@/components/reset-runtime-dialog";
@@ -36,7 +38,35 @@ export function SettingsForm({
   );
   const [saving, startSave] = useTransition();
   const [checking, startCheck] = useTransition();
-  const busy = saving || checking;
+  const [testingMedia, startMediaTest] = useTransition();
+  const [testingNotify, startNotifyTest] = useTransition();
+  const busy = saving || checking || testingMedia || testingNotify;
+
+  function handleTestMediaServer(formData: FormData) {
+    startMediaTest(async () => {
+      const result = await testMediaServerAction(formData);
+      if (result.ok) {
+        toast.success(result.message ?? t("toast.mediaServerTestOk"));
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
+
+  function handleTestNotification(formData: FormData) {
+    startNotifyTest(async () => {
+      const result = await testNotificationAction(formData);
+      if (result.ok) {
+        toast.success(result.message ?? t("toast.notificationTestOk", { channels: "" }));
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
 
   function handleSave(formData: FormData) {
     startSave(async () => {
@@ -249,7 +279,226 @@ export function SettingsForm({
               max={1440}
               help={t("settings.downloadTimeoutHelp")}
             />
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("settings.mediaServerTitle")}</CardTitle>
+            <CardDescription>{t("settings.mediaServerDescription")}</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-1.5">
+              <Label htmlFor="mediaServerType">{t("settings.mediaServerType")}</Label>
+              <select
+                id="mediaServerType"
+                name="mediaServerType"
+                defaultValue={settings.mediaServerType}
+                className="flex h-9 w-full rounded-[var(--radius)] border border-[var(--line)] bg-[var(--input)] px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]"
+              >
+                <option value="none">{t("settings.mediaServerNone")}</option>
+                <option value="jellyfin">Jellyfin</option>
+                <option value="emby">Emby</option>
+                <option value="plex">Plex</option>
+              </select>
+            </div>
+            <Field
+              label={t("settings.mediaServerUrl")}
+              name="mediaServerUrl"
+              defaultValue={settings.mediaServerUrl}
+              placeholder="http://127.0.0.1:8096"
+            />
+            <div className="grid gap-1.5">
+              <Field
+                label={t("settings.mediaServerToken")}
+                name="mediaServerToken"
+                defaultValue=""
+                placeholder={
+                  settings.hasMediaServerToken
+                    ? t("settings.tokenConfiguredPlaceholder")
+                    : "API Key / X-Plex-Token"
+                }
+                type="password"
+                autoComplete="new-password"
+              />
+              {settings.hasMediaServerToken ? (
+                <label className="flex items-center gap-1.5 text-xs text-[var(--muted)]">
+                  <input type="checkbox" name="clearMediaServerToken" value="1" />
+                  {t("settings.clearToken")}
+                </label>
+              ) : null}
+            </div>
+            <Field
+              label={t("settings.mediaServerLibraryId")}
+              name="mediaServerLibraryId"
+              defaultValue={settings.mediaServerLibraryId}
+              placeholder={t("settings.mediaServerLibraryIdPlaceholder")}
+              help={t("settings.mediaServerLibraryIdHelp")}
+            />
             <div className="md:col-span-2">
+              <Button
+                type="submit"
+                variant="outline"
+                disabled={busy}
+                formAction={handleTestMediaServer}
+              >
+                {testingMedia ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                {t("settings.testMediaServer")}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("settings.notifyTitle")}</CardTitle>
+            <CardDescription>{t("settings.notifyDescription")}</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <div className="flex flex-wrap gap-4 text-sm">
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  name="notifyOnCompleted"
+                  value="1"
+                  defaultChecked={settings.notifyOnCompleted}
+                />
+                {t("settings.notifyOnCompleted")}
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  name="notifyOnFailed"
+                  value="1"
+                  defaultChecked={settings.notifyOnFailed}
+                />
+                {t("settings.notifyOnFailed")}
+              </label>
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  name="notifyOnNeedsReview"
+                  value="1"
+                  defaultChecked={settings.notifyOnNeedsReview}
+                />
+                {t("settings.notifyOnNeedsReview")}
+              </label>
+            </div>
+
+            <div className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] p-3 md:grid-cols-2">
+              <label className="flex items-center gap-2 text-sm font-medium md:col-span-2">
+                <input
+                  type="checkbox"
+                  name="webhookEnabled"
+                  value="1"
+                  defaultChecked={settings.webhookEnabled}
+                />
+                Webhook (JSON POST)
+              </label>
+              <div className="md:col-span-2">
+                <Field
+                  label="Webhook URL"
+                  name="webhookUrl"
+                  defaultValue={settings.webhookUrl}
+                  placeholder="https://example.com/webhook"
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] p-3 md:grid-cols-2">
+              <label className="flex items-center gap-2 text-sm font-medium md:col-span-2">
+                <input
+                  type="checkbox"
+                  name="telegramEnabled"
+                  value="1"
+                  defaultChecked={settings.telegramEnabled}
+                />
+                Telegram Bot
+              </label>
+              <div className="grid gap-1.5">
+                <Field
+                  label="Bot Token"
+                  name="telegramBotToken"
+                  defaultValue=""
+                  placeholder={
+                    settings.hasTelegramBotToken
+                      ? t("settings.tokenConfiguredPlaceholder")
+                      : "123456:ABC-DEF..."
+                  }
+                  type="password"
+                  autoComplete="new-password"
+                />
+                {settings.hasTelegramBotToken ? (
+                  <label className="flex items-center gap-1.5 text-xs text-[var(--muted)]">
+                    <input type="checkbox" name="clearTelegramBotToken" value="1" />
+                    {t("settings.clearToken")}
+                  </label>
+                ) : null}
+              </div>
+              <Field
+                label="Chat ID"
+                name="telegramChatId"
+                defaultValue={settings.telegramChatId}
+                placeholder="-1001234567890"
+              />
+            </div>
+
+            <div className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] p-3 md:grid-cols-2">
+              <label className="flex items-center gap-2 text-sm font-medium md:col-span-2">
+                <input
+                  type="checkbox"
+                  name="barkEnabled"
+                  value="1"
+                  defaultChecked={settings.barkEnabled}
+                />
+                Bark
+              </label>
+              <Field
+                label={t("settings.barkServerUrl")}
+                name="barkServerUrl"
+                defaultValue={settings.barkServerUrl}
+                placeholder="https://api.day.app"
+              />
+              <div className="grid gap-1.5">
+                <Field
+                  label="Device Key"
+                  name="barkDeviceKey"
+                  defaultValue=""
+                  placeholder={
+                    settings.hasBarkDeviceKey
+                      ? t("settings.tokenConfiguredPlaceholder")
+                      : "Your Bark device key"
+                  }
+                  type="password"
+                  autoComplete="new-password"
+                />
+                {settings.hasBarkDeviceKey ? (
+                  <label className="flex items-center gap-1.5 text-xs text-[var(--muted)]">
+                    <input type="checkbox" name="clearBarkDeviceKey" value="1" />
+                    {t("settings.clearToken")}
+                  </label>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="submit"
+                variant="outline"
+                disabled={busy}
+                formAction={handleTestNotification}
+              >
+                {testingNotify ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Bell className="size-4" />
+                )}
+                {t("settings.testNotification")}
+              </Button>
               <Button variant="signal" type="submit" disabled={busy}>
                 {saving ? (
                   <Loader2 className="size-4 animate-spin" />

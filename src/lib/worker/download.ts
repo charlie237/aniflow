@@ -27,6 +27,7 @@ import {
   listOpenListFiles,
   removeOpenListFiles
 } from "@/lib/openlist/client";
+import { sendNotification } from "@/lib/notifications/notifier";
 import { evaluateRules } from "@/lib/rules/engine";
 import { resolveOfflineDownloadUrl } from "@/lib/torrent/magnet";
 import {
@@ -120,12 +121,19 @@ export async function reconcileDownloadingJobs() {
       const taskId = String(job.openlistTaskId);
       const task = byId.get(taskId);
       if (task && isOfflineTaskFailed(task)) {
+        const message = contextualError(
+          "OpenList offline task failed",
+          task.error?.trim() || `${task.status || task.state}`,
+          { taskId, targetPath: job.targetPath }
+        );
         updateJobStatus(job.id, "failed", {
-          errorMessage: contextualError(
-            "OpenList offline task failed",
-            task.error?.trim() || `${task.status || task.state}`,
-            { taskId, targetPath: job.targetPath }
-          )
+          errorMessage: message
+        });
+        await sendNotification({
+          type: "job_failed",
+          title: `Aniflow · Download failed (job #${job.id})`,
+          body: message,
+          details: { jobId: job.id, taskId }
         });
         failed += 1;
         continue;
