@@ -38,6 +38,17 @@ export function getRawDb() {
   return getSqlite();
 }
 
+/** Close the active SQLite handle cleanly (e.g. during graceful worker shutdown). */
+export function closeSqlite() {
+  if (!sqlite) return;
+  try {
+    sqlite.close();
+  } finally {
+    sqlite = null;
+    db = null;
+  }
+}
+
 function bootstrapSchema(database: Database.Database) {
   // Keep imperative bootstrap so existing SQLite files upgrade in place.
   // Table shapes match src/lib/db/schema.ts.

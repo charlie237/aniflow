@@ -89,5 +89,6 @@ export {
   getWorkerTaskPage,
   getWorkerTask,
   listWorkerTasksByStatus,
+  pruneOldWorkerTasks,
   updateWorkerTaskProgress
 } from "@/lib/db/repositories/worker-task-repository";

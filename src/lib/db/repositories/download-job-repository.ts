@@ -14,7 +14,6 @@ import { mapJob } from "@/lib/db/mappers";
 import { downloadJobs } from "@/lib/db/schema";
 import type { DownloadJob, JobStatus } from "@/lib/db/types";
 import { getSystemSettings } from "@/lib/db/repositories/system-settings-repository";
-import { joinRemotePath } from "@/lib/utils/path";
 
 export function getJobForFeedItem(feedItemId: number) {
   const row = getDb()
@@ -189,7 +188,6 @@ export function updateJobStatus(
 }
 
 export function migrateLegacyDownloadJobsToFailed() {
-  const jobsRoot = joinRemotePath(getSystemSettings().openlistIncomingPath, "jobs");
   return getDb()
     .update(downloadJobs)
     .set({
@@ -204,7 +202,7 @@ export function migrateLegacyDownloadJobsToFailed() {
         or(
           eq(downloadJobs.status, "waiting_file"),
           isNull(downloadJobs.targetPath),
-          sql`${downloadJobs.targetPath} != ${jobsRoot} || '/' || cast(${downloadJobs.id} as text)`
+          sql`NOT (${downloadJobs.targetPath} GLOB '/?*/jobs/' || cast(${downloadJobs.id} as text))`
         )
       )
     )

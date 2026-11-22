@@ -363,6 +363,45 @@ export function failStaleWorkerTasks(maxRunningSeconds = 1800) {
     .run().changes;
 }
 
+/**
+ * Remove old completed worker_tasks rows so the history table and dashboard
+ * window-function queries stay bounded over long-running deployments.
+ */
+export function pruneOldWorkerTasks(options?: {
+  routineRetentionDays?: number;
+  completedRetentionDays?: number;
+}) {
+  const routineDays = Math.max(1, Math.floor(options?.routineRetentionDays ?? 14));
+  const completedDays = Math.max(
+    routineDays,
+    Math.floor(options?.completedRetentionDays ?? 90)
+  );
+  const sqlite = getSqlite();
+
+  const routineDeleted = sqlite
+    .prepare(
+      `DELETE FROM worker_tasks
+       WHERE status = 'completed'
+         AND (${WORKER_TASK_CATEGORY_SQL}) = 'routine'
+         AND datetime(updated_at) < datetime('now', ?)`
+    )
+    .run(`-${routineDays} days`).changes;
+
+  const completedDeleted = sqlite
+    .prepare(
+      `DELETE FROM worker_tasks
+       WHERE status = 'completed'
+         AND datetime(updated_at) < datetime('now', ?)`
+    )
+    .run(`-${completedDays} days`).changes;
+
+  return {
+    routineDeleted,
+    completedDeleted,
+    totalDeleted: routineDeleted + completedDeleted
+  };
+}
+
 function mergeTaskPayload(
   existingJson: string | undefined,
   patch: Record<string, unknown>

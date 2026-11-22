@@ -33,6 +33,7 @@ const {
   pollSubscription,
   reconcileDownloadingJobs,
   retryJob,
+  runDownloadMaintenance,
   scanAndRenameIncoming,
   submitJob,
   submitQueuedJobs,
@@ -1083,7 +1084,7 @@ describe("download fail-stop lifecycle", () => {
       };
     }));
     try {
-      await scanAndRenameIncoming();
+      await runDownloadMaintenance();
       expect(getJob(seeded.job.id)?.status).toBe("completed");
       expect(getJob(seeded.job.id)?.targetPath).toContain(
         "/115/Anime/Moved Incoming/Season 01"

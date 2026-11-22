@@ -95,7 +95,7 @@ export type WorkerTaskProgressReporter = (
 ) => void;
 
 const INCOMING_MUTATION_LEASE = "incoming-mutation";
-const INCOMING_MUTATION_LEASE_SECONDS = 2 * 60 * 60;
+const INCOMING_MUTATION_LEASE_SECONDS = 5 * 60;
 
 /** Episode ranges like "01-13" / "01~13" in a single filename: batch releases. */
 const EPISODE_RANGE_RE = /\b\d{1,3}\s*[-~～至]\s*\d{1,3}\b/;

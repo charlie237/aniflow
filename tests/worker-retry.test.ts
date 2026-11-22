@@ -10,10 +10,12 @@ process.env.DATABASE_PATH = dbPath;
 const { getSqlite } = await import("@/lib/db/client");
 const {
   acquireWorkerLease,
+  completeWorkerTask,
   enqueueWorkerTask,
   failStaleWorkerTasks,
   failWorkerTask,
   getWorkerTask,
+  pruneOldWorkerTasks,
   refreshWorkerLease,
   releaseWorkerLease,
   updateWorkerTaskProgress
@@ -106,5 +108,64 @@ describe("worker fail-stop and lease", () => {
 
     releaseWorkerLease("incoming-mutation", "owner-a");
     expect(acquireWorkerLease("incoming-mutation", "owner-b", 3600)).toBe(true);
+  });
+
+  it("prunes old completed routine and historical tasks while keeping recent and failed tasks", () => {
+    const oldRoutine = enqueueWorkerTask({ type: "poll_all" });
+    if (!oldRoutine) return;
+    completeWorkerTask(oldRoutine.id, {
+      fetched: 10,
+      discovered: 2,
+      queued: 0,
+      skipped: 10,
+      failed: 0
+    });
+    getSqlite()
+      .prepare("UPDATE worker_tasks SET updated_at = datetime('now', '-20 days') WHERE id = ?")
+      .run(oldRoutine.id);
+
+    const recentRoutine = enqueueWorkerTask({ type: "poll_all" });
+    if (!recentRoutine) return;
+    completeWorkerTask(recentRoutine.id, {
+      fetched: 10,
+      discovered: 2,
+      queued: 0,
+      skipped: 10,
+      failed: 0
+    });
+
+    const oldAction = enqueueWorkerTask({ type: "poll_all" });
+    if (!oldAction) return;
+    completeWorkerTask(oldAction.id, {
+      fetched: 10,
+      discovered: 2,
+      queued: 1,
+      skipped: 9,
+      failed: 0
+    });
+    getSqlite()
+      .prepare("UPDATE worker_tasks SET updated_at = datetime('now', '-100 days') WHERE id = ?")
+      .run(oldAction.id);
+
+    const oldFailed = enqueueWorkerTask({ type: "scan_incoming" });
+    if (!oldFailed) return;
+    failWorkerTask(oldFailed.id, "network down");
+    getSqlite()
+      .prepare("UPDATE worker_tasks SET updated_at = datetime('now', '-100 days') WHERE id = ?")
+      .run(oldFailed.id);
+
+    const pruned = pruneOldWorkerTasks({
+      routineRetentionDays: 14,
+      completedRetentionDays: 90
+    });
+    expect(pruned).toEqual({
+      routineDeleted: 1,
+      completedDeleted: 1,
+      totalDeleted: 2
+    });
+    expect(getWorkerTask(oldRoutine.id)).toBeNull();
+    expect(getWorkerTask(oldAction.id)).toBeNull();
+    expect(getWorkerTask(recentRoutine.id)).not.toBeNull();
+    expect(getWorkerTask(oldFailed.id)).not.toBeNull();
   });
 });
