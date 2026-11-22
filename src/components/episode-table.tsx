@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   Archive,
   CheckCircle2,
+  Eraser,
   Eye,
   FileVideo,
   Loader2,
@@ -18,6 +19,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  assignEpisodeAndConfirmJobAction,
+  cleanAndRetryJobAction,
   confirmJobAction,
   forceConfirmJobAction,
   manualSupplementEpisodeAction,
@@ -352,16 +355,21 @@ export function EpisodeTable({
                   <TableCell>
                     <div className="flex justify-end gap-1">
                       {row.job?.status === "failed" ? (
-                        <JobActionButton
-                          jobId={row.job.id}
-                          action={retryJobAction}
-                          label={t("episode.retryDownload")}
-                          title={t("episode.retryDownloadTitle")}
-                          icon={<RotateCcw className="size-4" />}
-                        />
+                        <>
+                          <JobActionButton
+                            jobId={row.job.id}
+                            action={retryJobAction}
+                            label={t("episode.retryDownload")}
+                            title={t("episode.retryDownloadTitle")}
+                            icon={<RotateCcw className="size-4" />}
+                          />
+                          <CleanRetryDialog jobId={row.job.id} />
+                        </>
                       ) : null}
-                      {row.job?.status === "needs_review" ||
-                      row.job?.status === "discovered" ? (
+                      {row.job?.status === "needs_review" && row.episodeNumber == null ? (
+                        <AssignEpisodeDialog jobId={row.job.id} title={row.title} />
+                      ) : row.job?.status === "needs_review" ||
+                        row.job?.status === "discovered" ? (
                         <JobActionButton
                           jobId={row.job.id}
                           action={confirmJobAction}
@@ -448,6 +456,168 @@ function JobActionButton({
         {pending ? <Loader2 className="size-4 animate-spin" /> : icon}
       </Button>
     </form>
+  );
+}
+
+function CleanRetryDialog({ jobId }: { jobId: number }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+
+  function handleCleanRetry(formData: FormData) {
+    startTransition(async () => {
+      const result = await cleanAndRetryJobAction(formData);
+      if (result.ok) {
+        toast.success(result.message ?? t("toast.jobCleanedAndRetried"));
+        setOpen(false);
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          aria-label={t("episode.cleanRetry")}
+          title={t("episode.cleanRetryTitle")}
+        >
+          <Eraser className="size-4" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("episode.cleanRetry")}</DialogTitle>
+          <DialogDescription>
+            {t("episode.cleanRetryDescription", { id: jobId })}
+          </DialogDescription>
+        </DialogHeader>
+        <form action={handleCleanRetry} className="flex justify-end gap-2">
+          <input type="hidden" name="id" value={jobId} />
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() => setOpen(false)}
+          >
+            {t("common.cancel")}
+          </Button>
+          <Button type="submit" variant="danger" disabled={pending}>
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Eraser className="size-4" />
+            )}
+            {t("episode.cleanRetryConfirm")}
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AssignEpisodeDialog({
+  jobId,
+  title
+}: {
+  jobId: number;
+  title: string;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [pending, startTransition] = useTransition();
+
+  function handleSubmit(formData: FormData) {
+    startTransition(async () => {
+      const result = await assignEpisodeAndConfirmJobAction(formData);
+      if (result.ok) {
+        toast.success(result.message ?? t("toast.jobConfirmed"));
+        setOpen(false);
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          aria-label={t("episode.assignEpisode")}
+          title={t("episode.assignEpisodeTitle")}
+        >
+          <CheckCircle2 className="size-4" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("episode.assignEpisode")}</DialogTitle>
+          <DialogDescription className="break-words">{title}</DialogDescription>
+        </DialogHeader>
+        <form action={handleSubmit} className="grid gap-4">
+          <input type="hidden" name="id" value={jobId} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-1.5">
+              <Label htmlFor={`assign-ep-${jobId}`}>
+                {t("episode.episodeNumber")}
+              </Label>
+              <Input
+                id={`assign-ep-${jobId}`}
+                name="episodeNumber"
+                type="number"
+                min={0}
+                max={999}
+                required
+                autoFocus
+                placeholder="1"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor={`assign-rev-${jobId}`}>
+                {t("episode.revision")}
+              </Label>
+              <Input
+                id={`assign-rev-${jobId}`}
+                name="releaseRevision"
+                type="number"
+                min={1}
+                max={99}
+                placeholder="1"
+              />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending}
+              onClick={() => setOpen(false)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button type="submit" variant="signal" disabled={pending}>
+              {pending ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="size-4" />
+              )}
+              {t("episode.confirmDownload")}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -49,6 +49,7 @@ export {
   libraryFileExistsAtPath,
   listVariantFeedItemIds,
   syncLibraryEpisodeInventory,
+  updateFeedItemEpisodeNumber,
   upsertFeedItem
 } from "@/lib/db/repositories/release-repository";
 

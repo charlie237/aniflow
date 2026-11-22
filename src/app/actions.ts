@@ -12,6 +12,7 @@ import {
   deleteRule,
   deleteSubscription,
   enqueueWorkerTask,
+  getJob,
   getSystemSettings,
   getSubscription,
   listRules,
@@ -19,11 +20,12 @@ import {
   restoreSubscription,
   resetRuntimeData,
   saveSystemSettings,
+  updateFeedItemEpisodeNumber,
   updateSubscription,
   upsertFeedItem
 } from "@/lib/db/repositories";
 import type { RuleType, SystemSettings, WorkerTaskType } from "@/lib/db/types";
-import { confirmJob, retryJob } from "@/lib/worker/pipeline";
+import { cleanAndRetryJob, confirmJob, retryJob } from "@/lib/worker/pipeline";
 import { kickWorkerTaskRunner } from "@/lib/worker/tasks";
 import {
   check115Connectivity,
@@ -406,6 +408,57 @@ export async function retryJobAction(formData: FormData): Promise<ActionResult> 
     await retryJob(id);
     revalidatePath("/");
     return { ok: true, message: t("toast.jobRetried") };
+  } catch (error) {
+    revalidatePath("/");
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function cleanAndRetryJobAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const id = Number(formData.get("id"));
+    if (!Number.isFinite(id)) return { ok: false, error: "Invalid job id" };
+    await cleanAndRetryJob(id);
+    revalidatePath("/");
+    return { ok: true, message: t("toast.jobCleanedAndRetried") };
+  } catch (error) {
+    revalidatePath("/");
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+const assignEpisodeSchema = z.object({
+  id: z.coerce.number().int().positive(),
+  episodeNumber: z.coerce.number().int().min(0).max(999),
+  releaseRevision: z.preprocess(
+    (value) => (value === "" || value == null ? undefined : value),
+    z.coerce.number().int().min(1).max(99).optional()
+  )
+});
+
+export async function assignEpisodeAndConfirmJobAction(
+  formData: FormData
+): Promise<ActionResult> {
+  const { t } = await getDictionary();
+  try {
+    const parsed = assignEpisodeSchema.parse({
+      id: formData.get("id"),
+      episodeNumber: formData.get("episodeNumber"),
+      releaseRevision: formData.get("releaseRevision")
+    });
+    const job = getJob(parsed.id);
+    if (!job) return { ok: false, error: "Job not found" };
+    updateFeedItemEpisodeNumber(
+      job.feedItemId,
+      parsed.episodeNumber,
+      parsed.releaseRevision
+    );
+    await confirmJob(job.id);
+    revalidatePath("/");
+    return { ok: true, message: t("toast.jobConfirmed") };
   } catch (error) {
     revalidatePath("/");
     return { ok: false, error: formatActionError(error, t) };

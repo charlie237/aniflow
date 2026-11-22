@@ -24,10 +24,13 @@ const {
   restoreSubscription,
   saveSystemSettings,
   getSystemSettings,
+  updateFeedItemEpisodeNumber,
   upsertEpisodeFile,
   upsertFeedItem
 } = await import("@/lib/db/repositories");
 const {
+  cleanAndRetryJob,
+  confirmJob,
   incomingPathForJob,
   pollAllSubscriptions,
   pollSubscription,
@@ -1621,6 +1624,140 @@ describe("download fail-stop lifecycle", () => {
         "Subtitle Show - S01E01.zh-hans.ass",
         "Subtitle Show - S01E01.zh-hant.ass"
       ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("cleans leftovers inside /jobs/{id} and resubmits on cleanAndRetryJob", async () => {
+    const seeded = seedDownloadJob({
+      name: "Clean Retry Show",
+      sourceUrl: "magnet:?xt=urn:btih:clean-retry-show",
+      status: "failed"
+    });
+    const targetPath = incomingPathForJob(seeded.job.id);
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming"
+    });
+
+    let cleaned = false;
+    let removeCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const endpoint = String(input);
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        if (endpoint.endsWith("/api/fs/remove")) {
+          expect(body.dir).toBe(targetPath);
+          expect(body.names).toEqual(["broken.part"]);
+          cleaned = true;
+          removeCalls += 1;
+          return { ok: true, status: 200, json: async () => ({ code: 200, data: null }) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            code: 200,
+            data: endpoint.endsWith("/api/fs/list")
+              ? {
+                  content: cleaned
+                    ? []
+                    : [{ name: "broken.part", size: 10, is_dir: false }]
+                }
+              : endpoint.endsWith("/api/fs/add_offline_download")
+                ? { tasks: [{ id: "clean-retried-task", error: "" }] }
+                : null
+          })
+        };
+      })
+    );
+    try {
+      await cleanAndRetryJob(seeded.job.id);
+      expect(removeCalls).toBe(1);
+      expect(getJob(seeded.job.id)).toMatchObject({
+        status: "downloading",
+        openlistTaskId: "clean-retried-task"
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("updates episode metadata and confirms a needs_review job", async () => {
+    const sub = createSubscription({
+      name: "Manual Assign Show",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=9499",
+      seasonNumber: 1,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+    const feed = upsertFeedItem(sub, {
+      guid: "special-ova-1",
+      title: "[G] Manual Assign Show Special OVA [1080p][CHS].mkv",
+      downloadUrl: "magnet:?xt=urn:btih:special-ova",
+      metadata: {
+        releaseGroup: "G",
+        parsedTitle: "Manual Assign Show",
+        episodeNumber: null,
+        episodeText: null,
+        releaseRevision: 1,
+        resolution: "1080p",
+        subtitleLanguage: "CHS",
+        container: "mkv",
+        tags: [],
+        parseConfidence: 40,
+        needsReview: true
+      }
+    });
+    const job = createOrUpdateJob({
+      subscriptionId: sub.id,
+      feedItemId: feed.id,
+      status: "needs_review",
+      sourceUrl: "magnet:?xt=urn:btih:special-ova"
+    });
+    if (!job) return;
+
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming"
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const endpoint = String(input);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            code: 200,
+            data: endpoint.endsWith("/api/fs/list")
+              ? { content: [] }
+              : endpoint.endsWith("/api/fs/add_offline_download")
+                ? { tasks: [{ id: "assigned-task", error: "" }] }
+                : null
+          })
+        };
+      })
+    );
+    try {
+      const updatedMeta = updateFeedItemEpisodeNumber(feed.id, 13, 2);
+      expect(updatedMeta).toMatchObject({
+        episodeNumber: 13,
+        episodeText: "13",
+        releaseRevision: 2,
+        needsReview: false
+      });
+      await confirmJob(job.id);
+      expect(getJob(job.id)).toMatchObject({
+        status: "downloading",
+        openlistTaskId: "assigned-task"
+      });
     } finally {
       vi.unstubAllGlobals();
     }

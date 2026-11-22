@@ -126,6 +126,29 @@ export function getMetadataForFeedItem(feedItemId: number) {
   return mapMetadata(row as unknown as Record<string, unknown> | undefined);
 }
 
+export function updateFeedItemEpisodeNumber(
+  feedItemId: number,
+  episodeNumber: number,
+  releaseRevision?: number
+) {
+  const episodeText = String(episodeNumber).padStart(2, "0");
+  getDb()
+    .update(releaseMetadata)
+    .set({
+      episodeNumber,
+      episodeText,
+      needsReview: 0,
+      ...(releaseRevision != null &&
+      Number.isInteger(releaseRevision) &&
+      releaseRevision >= 1
+        ? { releaseRevision }
+        : {})
+    })
+    .where(eq(releaseMetadata.feedItemId, feedItemId))
+    .run();
+  return getMetadataForFeedItem(feedItemId);
+}
+
 export function findFeedItemsForSubscription(subscriptionId: number) {
   return getDb()
     .select()

@@ -20,10 +20,12 @@ import {
   add115OfflineDownload,
   ensureOpenListDirectory,
   isOfflineTaskFailed,
+  isOpenListNotFoundError,
   listOfflineDownloadDone,
   listOfflineDownloadTransferUndone,
   listOfflineDownloadUndone,
-  listOpenListFiles
+  listOpenListFiles,
+  removeOpenListFiles
 } from "@/lib/openlist/client";
 import { evaluateRules } from "@/lib/rules/engine";
 import { resolveOfflineDownloadUrl } from "@/lib/torrent/magnet";
@@ -176,6 +178,48 @@ export async function retryJob(jobId: number) {
     errorMessage: null,
     targetPath
   });
+}
+
+/**
+ * Clean leftovers inside the job's exclusive `/jobs/{id}` directory and retry.
+ * Never touches parent directories or the media library.
+ */
+export async function cleanAndRetryJob(jobId: number) {
+  const job = getJob(jobId);
+  if (!job) throw new Error(`Job ${jobId} not found`);
+  if (job.status !== "failed") {
+    throw new Error(
+      `Job ${jobId} cannot be cleaned and retried from status ${job.status}; expected failed`
+    );
+  }
+  const targetPath = incomingPathForJob(job.id);
+  const expectedSuffix = `/jobs/${job.id}`;
+  if (!targetPath.endsWith(expectedSuffix) || targetPath.length <= expectedSuffix.length) {
+    throw new Error(`Refusing to clean unexpected path: ${targetPath}`);
+  }
+
+  try {
+    const entries = await listOpenListFiles(targetPath, { refresh: true });
+    if (entries.length > 0) {
+      await removeOpenListFiles({
+        dir: targetPath,
+        names: entries.map((entry) => entry.name)
+      });
+      console.log(
+        `[pipeline] cleaned ${entries.length} leftover entry(s) in ${targetPath} for job#${job.id}`
+      );
+    }
+  } catch (error) {
+    if (!isOpenListNotFoundError(error)) {
+      const message = contextualError("Failed to clean job directory before retry", error, {
+        targetPath
+      });
+      updateJobStatus(job.id, "failed", { targetPath, errorMessage: message });
+      throw new Error(message);
+    }
+  }
+
+  await retryJob(job.id);
 }
 
 export async function confirmJob(

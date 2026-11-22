@@ -19,6 +19,7 @@ export {
 export { syncSubscriptionLibrary } from "@/lib/worker/library-sync";
 export { scanAndRenameIncoming } from "@/lib/worker/organize";
 export {
+  cleanAndRetryJob,
   confirmJob,
   reconcileDownloadingJobs,
   retryJob,
