@@ -69,13 +69,7 @@ export function queryDashboardEpisodePage(
     subscriptionEnabled: query.subscriptionState === "active" ? 1 : 0
   };
 
-  const counts = {
-    all: countEpisodes(bind, "all"),
-    active: countEpisodes(bind, "active"),
-    completed: countEpisodes(bind, "completed"),
-    failed: countEpisodes(bind, "failed"),
-    waiting: countEpisodes(bind, "waiting")
-  };
+  const counts = countEpisodesByStatus(bind);
 
   const total = counts[query.status === "all" ? "all" : query.status];
   const pageCount = Math.max(1, Math.ceil(total / query.pageSize));
@@ -113,21 +107,36 @@ export function queryDashboardEpisodePage(
   };
 }
 
-function countEpisodes(
-  bind: {
-    subscriptionId: number | null;
-    season: number | null;
-    subscriptionEnabled: number;
-  },
-  status: EpisodeStatusFilter
-) {
+function countEpisodesByStatus(bind: {
+  subscriptionId: number | null;
+  season: number | null;
+  subscriptionEnabled: number;
+}): Record<EpisodeStatusFilter, number> {
   const sql = `
-    SELECT COUNT(*) AS count
+    SELECT
+      COUNT(*) AS all_count,
+      COALESCE(SUM(CASE WHEN ${statusSql("active")} THEN 1 ELSE 0 END), 0) AS active_count,
+      COALESCE(SUM(CASE WHEN ${statusSql("completed")} THEN 1 ELSE 0 END), 0) AS completed_count,
+      COALESCE(SUM(CASE WHEN ${statusSql("failed")} THEN 1 ELSE 0 END), 0) AS failed_count,
+      COALESCE(SUM(CASE WHEN ${statusSql("waiting")} THEN 1 ELSE 0 END), 0) AS waiting_count
     FROM (${preferredEpisodeSql()}) AS preferred
-    WHERE ${statusSql(status)}
   `;
-  const row = getSqlite().prepare(sql).get(bind) as { count: number };
-  return Number(row.count);
+  const row = getSqlite().prepare(sql).get(bind) as
+    | {
+        all_count: number;
+        active_count: number;
+        completed_count: number;
+        failed_count: number;
+        waiting_count: number;
+      }
+    | undefined;
+  return {
+    all: Number(row?.all_count ?? 0),
+    active: Number(row?.active_count ?? 0),
+    completed: Number(row?.completed_count ?? 0),
+    failed: Number(row?.failed_count ?? 0),
+    waiting: Number(row?.waiting_count ?? 0)
+  };
 }
 
 function listEpisodeRows(

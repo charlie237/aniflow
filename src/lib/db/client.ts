@@ -200,7 +200,12 @@ function bootstrapSchema(database: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_jobs_info_hash ON download_jobs(info_hash);
     CREATE INDEX IF NOT EXISTS idx_jobs_openlist_task ON download_jobs(openlist_task_id);
   `);
-  backfillReleaseRevisions(database);
+
+  const currentVersion = Number(database.pragma("user_version", { simple: true }) ?? 0);
+  if (currentVersion < 1) {
+    backfillReleaseRevisions(database);
+    database.pragma("user_version = 1");
+  }
 }
 
 function normalizeReleaseMetadataSchema(database: Database.Database) {
@@ -211,39 +216,42 @@ function normalizeReleaseMetadataSchema(database: Database.Database) {
   const removedColumns = ["source", "codec", "bit_depth", "audio", "video_tag"];
   if (!removedColumns.some((column) => names.has(column))) return;
 
-  database.exec(`
-    DROP TABLE IF EXISTS release_metadata_next;
+  const migrate = database.transaction(() => {
+    database.exec(`
+      DROP TABLE IF EXISTS release_metadata_next;
 
-    CREATE TABLE release_metadata_next (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      feed_item_id INTEGER NOT NULL UNIQUE REFERENCES feed_items(id) ON DELETE CASCADE,
-      release_group TEXT,
-      parsed_title TEXT,
-      episode_number INTEGER,
-      episode_text TEXT,
-      release_revision INTEGER NOT NULL DEFAULT 1,
-      resolution TEXT,
-      subtitle_language TEXT,
-      container TEXT,
-      tags_json TEXT NOT NULL DEFAULT '[]',
-      parse_confidence INTEGER NOT NULL DEFAULT 0,
-      needs_review INTEGER NOT NULL DEFAULT 0
-    );
+      CREATE TABLE release_metadata_next (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        feed_item_id INTEGER NOT NULL UNIQUE REFERENCES feed_items(id) ON DELETE CASCADE,
+        release_group TEXT,
+        parsed_title TEXT,
+        episode_number INTEGER,
+        episode_text TEXT,
+        release_revision INTEGER NOT NULL DEFAULT 1,
+        resolution TEXT,
+        subtitle_language TEXT,
+        container TEXT,
+        tags_json TEXT NOT NULL DEFAULT '[]',
+        parse_confidence INTEGER NOT NULL DEFAULT 0,
+        needs_review INTEGER NOT NULL DEFAULT 0
+      );
 
-    INSERT INTO release_metadata_next (
-      id, feed_item_id, release_group, parsed_title, episode_number,
-      episode_text, release_revision, resolution, subtitle_language, container,
-      tags_json, parse_confidence, needs_review
-    )
-    SELECT
-      id, feed_item_id, release_group, parsed_title, episode_number,
-      episode_text, 1, resolution, subtitle_language, container,
-      tags_json, parse_confidence, needs_review
-    FROM release_metadata;
+      INSERT INTO release_metadata_next (
+        id, feed_item_id, release_group, parsed_title, episode_number,
+        episode_text, release_revision, resolution, subtitle_language, container,
+        tags_json, parse_confidence, needs_review
+      )
+      SELECT
+        id, feed_item_id, release_group, parsed_title, episode_number,
+        episode_text, 1, resolution, subtitle_language, container,
+        tags_json, parse_confidence, needs_review
+      FROM release_metadata;
 
-    DROP TABLE release_metadata;
-    ALTER TABLE release_metadata_next RENAME TO release_metadata;
-  `);
+      DROP TABLE release_metadata;
+      ALTER TABLE release_metadata_next RENAME TO release_metadata;
+    `);
+  });
+  migrate();
 }
 
 function backfillReleaseRevisions(database: Database.Database) {

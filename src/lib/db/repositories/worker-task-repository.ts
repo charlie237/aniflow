@@ -72,7 +72,7 @@ export function getWorkerTaskPage(input: {
   pageSize: number;
 }): DashboardWorkerTaskPage {
   const sqlite = getSqlite();
-  const countRow = sqlite
+  const summaryRow = sqlite
     .prepare(
       `${WORKER_TASK_GROUP_CTE}
        SELECT
@@ -81,34 +81,22 @@ export function getWorkerTaskPage(input: {
          COALESCE(SUM(category = 'attention'), 0) AS attention_count,
          COALESCE(SUM(category = 'action'), 0) AS action_count,
          COALESCE(SUM(category = 'routine'), 0) AS routine_count,
-         COALESCE(SUM(category = 'other'), 0) AS other_count
-       FROM classified`
+         COALESCE(SUM(category = 'other'), 0) AS other_count,
+         COUNT(DISTINCT CASE WHEN @category = 'all' OR category = @category THEN group_no END) AS group_count,
+         COALESCE(SUM(CASE WHEN @category = 'all' OR category = @category THEN 1 ELSE 0 END), 0) AS task_count
+       FROM grouped`
     )
-    .get() as Record<string, number> | undefined;
+    .get({ category: input.category }) as Record<string, number> | undefined;
   const counts: DashboardWorkerTaskPage["counts"] = {
-    all: Number(countRow?.all_count ?? 0),
-    active: Number(countRow?.active_count ?? 0),
-    attention: Number(countRow?.attention_count ?? 0),
-    action: Number(countRow?.action_count ?? 0),
-    routine: Number(countRow?.routine_count ?? 0),
-    other: Number(countRow?.other_count ?? 0)
+    all: Number(summaryRow?.all_count ?? 0),
+    active: Number(summaryRow?.active_count ?? 0),
+    attention: Number(summaryRow?.attention_count ?? 0),
+    action: Number(summaryRow?.action_count ?? 0),
+    routine: Number(summaryRow?.routine_count ?? 0),
+    other: Number(summaryRow?.other_count ?? 0)
   };
-  const categoryWhere = input.category === "all" ? "1 = 1" : "category = ?";
-  const categoryParams = input.category === "all" ? [] : [input.category];
-  const groupCountRow = sqlite
-    .prepare(
-      `${WORKER_TASK_GROUP_CTE}
-       SELECT COUNT(*) AS group_count, COALESCE(SUM(task_count), 0) AS task_count
-       FROM (
-         SELECT group_no, COUNT(*) AS task_count
-         FROM grouped
-         WHERE ${categoryWhere}
-         GROUP BY group_no
-       )`
-    )
-    .get(...categoryParams) as Record<string, number> | undefined;
-  const total = Number(groupCountRow?.group_count ?? 0);
-  const taskTotal = Number(groupCountRow?.task_count ?? 0);
+  const total = Number(summaryRow?.group_count ?? 0);
+  const taskTotal = Number(summaryRow?.task_count ?? 0);
   const pageSize = Math.max(1, Math.min(100, input.pageSize));
   const pageCount = Math.ceil(total / pageSize);
   const page = Math.min(Math.max(1, input.page), Math.max(1, pageCount));
@@ -118,17 +106,21 @@ export function getWorkerTaskPage(input: {
        selected_groups AS (
          SELECT group_no
          FROM grouped
-         WHERE ${categoryWhere}
+         WHERE @category = 'all' OR category = @category
          GROUP BY group_no
          ORDER BY group_no
-         LIMIT ? OFFSET ?
+         LIMIT @limit OFFSET @offset
        )
        SELECT grouped.*
        FROM grouped
        INNER JOIN selected_groups USING (group_no)
        ORDER BY grouped.group_no, grouped.updated_at DESC, grouped.id DESC`
     )
-    .all(...categoryParams, pageSize, (page - 1) * pageSize)
+    .all({
+      category: input.category,
+      limit: pageSize,
+      offset: (page - 1) * pageSize
+    })
     .map((row) => {
       const record = row as unknown as Record<string, unknown>;
       return {
