@@ -8,6 +8,44 @@ const MEDIA_EXTENSIONS = new Set([
   "ts",
   "webm"
 ]);
+const SUBTITLE_EXTENSIONS = new Set([
+  "ass",
+  "ssa",
+  "srt",
+  "vtt",
+  "sup",
+  "sub"
+]);
+const SAMPLE_OR_EXTRA_RE =
+  /(?:^|[\s._\-([【])(sample|trailer|preview|ncop|nced|menu|cm\d*|pv\d*)(?:$|[\s._\-)\]】])/i;
+
+const SUBTITLE_LANG_MAP: Record<string, string> = {
+  sc: "zh-hans",
+  chs: "zh-hans",
+  gb: "zh-hans",
+  "zh-cn": "zh-hans",
+  "zh-hans": "zh-hans",
+  scjp: "zh-hans",
+  chsjp: "zh-hans",
+  chs_jpn: "zh-hans",
+  jpsc: "zh-hans",
+  tc: "zh-hant",
+  cht: "zh-hant",
+  big5: "zh-hant",
+  "zh-tw": "zh-hant",
+  "zh-hk": "zh-hant",
+  "zh-hant": "zh-hant",
+  tcjp: "zh-hant",
+  chtjp: "zh-hant",
+  jptc: "zh-hant",
+  zh: "zh",
+  chi: "zh",
+  ja: "ja",
+  jp: "ja",
+  jpn: "ja",
+  en: "en",
+  eng: "en"
+};
 
 export function sanitizePathSegment(value: string) {
   const sanitized = value
@@ -66,6 +104,37 @@ export function getRemoteDirName(path: string) {
 export function isMediaFile(path: string) {
   const extension = getExtension(path);
   return extension != null && MEDIA_EXTENSIONS.has(extension);
+}
+
+export function isSubtitleFile(path: string) {
+  const extension = getExtension(path);
+  return extension != null && SUBTITLE_EXTENSIONS.has(extension);
+}
+
+export function isSampleOrExtraMedia(filename: string) {
+  const stem = filename.replace(/\.[^.]+$/, "");
+  return SAMPLE_OR_EXTRA_RE.test(stem);
+}
+
+/**
+ * Build a Jellyfin/Plex-friendly sidecar subtitle filename from the final video
+ * filename while preserving recognized language tags (e.g. `.sc.ass` -> `.zh-hans.ass`).
+ */
+export function buildSidecarSubtitleName(
+  videoFinalName: string,
+  subtitleFilename: string
+) {
+  const subExt = getExtension(subtitleFilename);
+  if (!subExt) return null;
+  const videoStem = videoFinalName.replace(/\.[^.]+$/, "");
+  const subStem = subtitleFilename.slice(0, -(subExt.length + 1));
+  const rawTag = subStem.match(/[._\-([【]([a-z]{2,7}(?:[-_][a-z]{2,4})?)[)\]】]?$/i)?.[1];
+  const normalizedLang = rawTag
+    ? SUBTITLE_LANG_MAP[rawTag.toLowerCase()] ?? null
+    : null;
+  return normalizedLang
+    ? `${videoStem}.${normalizedLang}.${subExt}`
+    : `${videoStem}.${subExt}`;
 }
 
 export function buildEpisodePath(params: {

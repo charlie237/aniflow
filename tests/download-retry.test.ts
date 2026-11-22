@@ -1564,4 +1564,65 @@ describe("download fail-stop lifecycle", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("organizes sidecar subtitles alongside the main episode and ignores sample clips", async () => {
+    const seeded = seedDownloadJob({
+      name: "Subtitle Show",
+      sourceUrl: "magnet:?xt=urn:btih:subtitle-show",
+      status: "downloading"
+    });
+    const targetPath = incomingPathForJob(seeded.job.id);
+    getSqlite()
+      .prepare("UPDATE download_jobs SET target_path = ? WHERE id = ?")
+      .run(targetPath, seeded.job.id);
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming",
+      mediaLibraryRoot: "/115/Anime"
+    });
+    const requests: Array<{ endpoint: string; body: Record<string, unknown> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const endpoint = String(input);
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        requests.push({ endpoint, body });
+        const isJobList =
+          endpoint.endsWith("/api/fs/list") && body.path === targetPath;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            code: 200,
+            data: isJobList
+              ? {
+                  content: [
+                    { name: "[G] Subtitle Show - 01 [1080p].mkv", size: 500_000_000, is_dir: false },
+                    { name: "[G] Subtitle Show - 01.sample.mkv", size: 5_000_000, is_dir: false },
+                    { name: "[G] Subtitle Show - 01.sc.ass", size: 80_000, is_dir: false },
+                    { name: "[G] Subtitle Show - 01.tc.ass", size: 80_000, is_dir: false }
+                  ]
+                }
+              : { content: [] }
+          })
+        };
+      })
+    );
+    try {
+      await scanAndRenameIncoming();
+      expect(getJob(seeded.job.id)?.status).toBe("completed");
+      const movedNames = requests
+        .filter(({ endpoint }) => endpoint.endsWith("/api/fs/move"))
+        .flatMap(({ body }) => (Array.isArray(body.names) ? body.names : []));
+      expect(movedNames).toEqual([
+        "Subtitle Show - S01E01.mkv",
+        "Subtitle Show - S01E01.zh-hans.ass",
+        "Subtitle Show - S01E01.zh-hant.ass"
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

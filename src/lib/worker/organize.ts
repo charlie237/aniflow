@@ -27,11 +27,13 @@ import {
 import { parseReleaseTitle } from "@/lib/rss/title-parser";
 import {
   buildEpisodePath,
+  buildSidecarSubtitleName,
   extractEpisodeNumberFromFilename,
   getExtension,
   getRemoteBaseName,
   getRemoteDirName,
   isRemotePathWithin,
+  isSampleOrExtraMedia,
   joinRemotePath
 } from "@/lib/utils/path";
 import {
@@ -44,7 +46,7 @@ import {
   errorMessage,
   incomingPathForJob,
   libraryRootForSubscription,
-  listOpenListMediaFiles,
+  listOpenListJobAssets,
   resolveEffectiveEpisodeNumber
 } from "@/lib/worker/pipeline-shared";
 
@@ -130,9 +132,9 @@ async function scanJobTarget(job: DownloadJob) {
     return;
   }
 
-  let files: OpenListFileEntry[];
+  let assets: { mediaFiles: OpenListFileEntry[]; subtitleFiles: OpenListFileEntry[] };
   try {
-    files = await listOpenListMediaFiles(targetPath);
+    assets = await listOpenListJobAssets(targetPath);
   } catch (error) {
     updateJobStatus(job.id, "failed", {
       errorMessage: contextualError("Scan job download directory failed", error, {
@@ -141,7 +143,15 @@ async function scanJobTarget(job: DownloadJob) {
     });
     return;
   }
+  let files = assets.mediaFiles;
   if (files.length === 0) return;
+
+  if (files.length > 1) {
+    const mainCandidates = files.filter((entry) => !isSampleOrExtraMedia(entry.name));
+    if (mainCandidates.length === 1) {
+      files = mainCandidates;
+    }
+  }
 
   if (files.length !== 1) {
     updateJobStatus(job.id, "failed", {
@@ -204,11 +214,18 @@ async function scanJobTarget(job: DownloadJob) {
     return;
   }
 
-  await organizeJobFile(file, subscription, job, effectiveEpisode);
+  await organizeJobFile(
+    file,
+    assets.subtitleFiles,
+    subscription,
+    job,
+    effectiveEpisode
+  );
 }
 
 async function organizeJobFile(
   file: OpenListFileEntry,
+  subtitleFiles: OpenListFileEntry[],
   subscription: Subscription,
   job: DownloadJob,
   expectedEpisodeNumber: number
@@ -364,6 +381,14 @@ async function organizeJobFile(
       });
     }
 
+    await organizeSidecarSubtitles({
+      subtitleFiles,
+      finalDir,
+      videoFinalName: finalName,
+      overwrite: shouldReplaceExisting,
+      cleanupRoot
+    });
+
     await cleanupEmptyDirectory(sourceDir, cleanupRoot);
 
     upsertEpisodeFile({
@@ -406,6 +431,72 @@ async function organizeJobFile(
       errorMessage: message
     });
   }
+}
+
+async function organizeSidecarSubtitles(params: {
+  subtitleFiles: OpenListFileEntry[];
+  finalDir: string;
+  videoFinalName: string;
+  overwrite: boolean;
+  cleanupRoot: string;
+}) {
+  if (params.subtitleFiles.length === 0) return;
+  const usedTargetNames = new Set<string>();
+  const dirsToClean = new Set<string>();
+
+  for (const sub of params.subtitleFiles) {
+    const baseTargetName = buildSidecarSubtitleName(
+      params.videoFinalName,
+      sub.name
+    );
+    if (!baseTargetName) continue;
+    const targetName = deduplicateFilename(baseTargetName, usedTargetNames);
+    usedTargetNames.add(targetName.toLowerCase());
+
+    const subDir = getRemoteDirName(sub.path);
+    dirsToClean.add(subDir);
+    let currentSubName = getRemoteBaseName(sub.path);
+
+    try {
+      if (currentSubName !== targetName) {
+        await renameOpenListFile({
+          path: sub.path,
+          name: targetName,
+          overwrite: params.overwrite
+        });
+        currentSubName = targetName;
+      }
+      if (subDir !== params.finalDir) {
+        await moveOpenListFiles({
+          srcDir: subDir,
+          dstDir: params.finalDir,
+          names: [currentSubName],
+          overwrite: params.overwrite
+        });
+      }
+    } catch (error) {
+      // Sidecar subtitle organization is best-effort and must not roll back
+      // a successfully organized main video episode.
+      console.warn(
+        `[pipeline] sidecar subtitle organize skipped for ${sub.path}: ${errorMessage(error)}`
+      );
+    }
+  }
+
+  for (const dir of dirsToClean) {
+    await cleanupEmptyDirectory(dir, params.cleanupRoot);
+  }
+}
+
+function deduplicateFilename(filename: string, usedLower: Set<string>) {
+  if (!usedLower.has(filename.toLowerCase())) return filename;
+  const ext = getExtension(filename);
+  const stem = ext ? filename.slice(0, -(ext.length + 1)) : filename;
+  for (let index = 2; index < 100; index += 1) {
+    const candidate = ext ? `${stem}.${index}.${ext}` : `${stem}.${index}`;
+    if (!usedLower.has(candidate.toLowerCase())) return candidate;
+  }
+  return filename;
 }
 
 async function cleanupEmptyDirectory(path: string, root: string) {

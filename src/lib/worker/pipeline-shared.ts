@@ -13,7 +13,7 @@ import {
   listOpenListFiles,
   type OpenListFileEntry
 } from "@/lib/openlist/client";
-import { isMediaFile, joinRemotePath } from "@/lib/utils/path";
+import { isMediaFile, isSubtitleFile, joinRemotePath } from "@/lib/utils/path";
 
 export interface PipelineResult {
   /** Total items in the RSS feed this poll. */
@@ -56,22 +56,40 @@ export async function listOpenListMediaFiles(
   root: string,
   visited = new Set<string>()
 ): Promise<OpenListFileEntry[]> {
+  const assets = await listOpenListJobAssets(root, visited);
+  return assets.mediaFiles;
+}
+
+export async function listOpenListJobAssets(
+  root: string,
+  visited = new Set<string>()
+): Promise<{
+  mediaFiles: OpenListFileEntry[];
+  subtitleFiles: OpenListFileEntry[];
+}> {
   const normalizedRoot = joinRemotePath(root);
-  if (visited.has(normalizedRoot)) return [];
+  if (visited.has(normalizedRoot)) {
+    return { mediaFiles: [], subtitleFiles: [] };
+  }
   visited.add(normalizedRoot);
 
   const entries = await listOpenListFiles(normalizedRoot, {
     refresh: visited.size === 1
   });
-  const files: OpenListFileEntry[] = [];
+  const mediaFiles: OpenListFileEntry[] = [];
+  const subtitleFiles: OpenListFileEntry[] = [];
   for (const entry of entries) {
     if (entry.isDirectory) {
-      files.push(...(await listOpenListMediaFiles(entry.path, visited)));
+      const nested = await listOpenListJobAssets(entry.path, visited);
+      mediaFiles.push(...nested.mediaFiles);
+      subtitleFiles.push(...nested.subtitleFiles);
     } else if (isMediaFile(entry.path)) {
-      files.push(entry);
+      mediaFiles.push(entry);
+    } else if (isSubtitleFile(entry.path)) {
+      subtitleFiles.push(entry);
     }
   }
-  return files;
+  return { mediaFiles, subtitleFiles };
 }
 
 export function supersedeSiblingRevisionJobs(

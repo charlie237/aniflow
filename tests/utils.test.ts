@@ -4,7 +4,10 @@ import { parseToUtcDate, toStoredUtcIso } from "@/lib/time";
 import {
   buildEpisodePath,
   buildSeasonLibraryPath,
-  extractEpisodeNumberFromFilename
+  buildSidecarSubtitleName,
+  extractEpisodeNumberFromFilename,
+  isSampleOrExtraMedia,
+  isSubtitleFile
 } from "@/lib/utils/path";
 
 describe("formatFileSize", () => {
@@ -81,5 +84,25 @@ describe("media library paths", () => {
         episodeFileTemplate: "{title}.{season_pad}x{episode_pad}.{ext}"
       })
     ).toBeNull();
+  });
+
+  it("identifies sidecar subtitles, maps language tags, and detects sample clips", () => {
+    expect(isSubtitleFile("/a/ep01.sc.ass")).toBe(true);
+    expect(isSubtitleFile("/a/ep01.srt")).toBe(true);
+    expect(isSubtitleFile("/a/ep01.mkv")).toBe(false);
+
+    expect(
+      buildSidecarSubtitleName("Frieren - S02E01.mkv", "[Sub] Frieren - 01.sc.ass")
+    ).toBe("Frieren - S02E01.zh-hans.ass");
+    expect(
+      buildSidecarSubtitleName("Frieren - S02E01.mkv", "[Sub] Frieren - 01.tc.ass")
+    ).toBe("Frieren - S02E01.zh-hant.ass");
+    expect(
+      buildSidecarSubtitleName("Frieren - S02E01.mkv", "[Sub] Frieren - 01.srt")
+    ).toBe("Frieren - S02E01.srt");
+
+    expect(isSampleOrExtraMedia("Show.S01E01.sample.mkv")).toBe(true);
+    expect(isSampleOrExtraMedia("[G] Show NCOP 1080p.mkv")).toBe(true);
+    expect(isSampleOrExtraMedia("[G] Show - 01 [1080p][CHS].mkv")).toBe(false);
   });
 });
