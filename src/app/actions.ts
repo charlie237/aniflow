@@ -35,6 +35,7 @@ import {
 } from "@/lib/openlist/client";
 import { triggerMediaServerRefresh } from "@/lib/media-server/refresh";
 import { sendNotification } from "@/lib/notifications/notifier";
+import { importSubscriptionsPayload } from "@/lib/subscriptions-io";
 import { getDictionary } from "@/lib/i18n/server";
 import { RUNTIME_RESET_CONFIRM_PHRASE } from "@/lib/runtime-reset";
 import { toBool } from "@/lib/utils";
@@ -695,6 +696,29 @@ export async function testNotificationAction(
       message: t("toast.notificationTestOk", {
         channels: result.sent.join(", ")
       })
+    };
+  } catch (error) {
+    return { ok: false, error: formatActionError(error, t) };
+  }
+}
+
+export async function importSubscriptionsAction(
+  formData: FormData
+): Promise<ActionResult<{ imported: number; skipped: number }>> {
+  const { t } = await getDictionary();
+  try {
+    const raw = formData.get("payload")?.toString() ?? "";
+    if (!raw.trim()) {
+      return { ok: false, error: "Empty JSON payload" };
+    }
+    const parsedJson = JSON.parse(raw) as unknown;
+    const summary = importSubscriptionsPayload(parsedJson);
+    revalidatePath("/");
+    revalidatePath("/subscriptions");
+    return {
+      ok: true,
+      message: t("toast.importOk", summary),
+      data: summary
     };
   } catch (error) {
     return { ok: false, error: formatActionError(error, t) };

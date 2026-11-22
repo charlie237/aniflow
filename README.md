@@ -47,9 +47,9 @@ AUTH_SECRET=
 
 ## Web UI
 
-- **Overview** — jobs, episodes, worker queue, and health
-- **Subscriptions** — parse RSS, create rules, archive or delete subscriptions
-- **Settings** — OpenList / 115 / proxy / naming / worker interval, plus maintenance
+- **Overview** — weekly airing schedule, episodes (with manual episode assignment & safe clean-retry), worker queue, and health
+- **Subscriptions** — parse RSS, configure season / episode offset / start episode / library root / keyword & block rules, archive or delete, and import/export JSON backups
+- **Settings** — OpenList / 115 / proxy / naming / media server auto-refresh (Plex, Jellyfin, Emby) / notifications (Webhook, Telegram, Bark) / worker interval, plus maintenance
 
 Theme preference (light, dark, or follow system) is stored in the browser; use the header icon to cycle modes.
 

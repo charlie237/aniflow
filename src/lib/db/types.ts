@@ -277,12 +277,23 @@ export type PublicSystemSettings = Omit<
   hasBarkDeviceKey: boolean;
 };
 
+export interface WeeklyScheduleEntry {
+  subscriptionId: number;
+  name: string;
+  seasonNumber: number;
+  /** 0 = Sunday .. 6 = Saturday in display timezone (Asia/Shanghai). */
+  weekday: number;
+  latestEpisode: number | null;
+  lastPublishedAt: string;
+}
+
 export interface DashboardData {
   subscriptions: Subscription[];
   rules: FilterRule[];
   workerTaskPage: DashboardWorkerTaskPage;
   episodePage: DashboardEpisodePage;
   workerHealth: WorkerHealth;
+  schedule: WeeklyScheduleEntry[];
   stats: {
     activeSubscriptions: number;
     queuedJobs: number;

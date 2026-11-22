@@ -67,6 +67,20 @@ const en = {
     noHeartbeatSince: "No heartbeat for {age}",
     neverHeartbeat: "Never seen"
   },
+  schedule: {
+    title: "Weekly schedule",
+    description: "Inferred weekly airing days based on recent RSS release timestamps.",
+    today: "Today",
+    days: {
+      "0": "Sun",
+      "1": "Mon",
+      "2": "Tue",
+      "3": "Wed",
+      "4": "Thu",
+      "5": "Fri",
+      "6": "Sat"
+    }
+  },
   subscriptionsPage: {
     title: "Subscriptions",
     description:
@@ -295,6 +309,8 @@ const en = {
     clearFilters: "Clear filters",
     autoDownload: "Auto offline",
     create: "Create subscription",
+    exportJson: "Export JSON",
+    importJson: "Import JSON",
     tracking: "Tracking",
     noTracking: "No active subscriptions.",
     archived: "Archived",
@@ -464,6 +480,7 @@ const en = {
     mediaServerNotConfigured: "Select a media server and configure URL & token first",
     notificationTestOk: "Test notification sent via: {channels}",
     notificationNotConfigured: "Enable and configure at least one notification channel first",
+    importOk: "Imported {imported} subscription(s), skipped {skipped} existing",
     actionFailed: "Action failed: {error}"
   }
 } as const;

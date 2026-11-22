@@ -65,6 +65,20 @@ const zhCN = {
     noHeartbeatSince: "{age} 未心跳",
     neverHeartbeat: "从未心跳"
   },
+  schedule: {
+    title: "追更周历",
+    description: "根据近期 RSS 发布时间推算各追更订阅的每周更新日。",
+    today: "今日",
+    days: {
+      "0": "周日",
+      "1": "周一",
+      "2": "周二",
+      "3": "周三",
+      "4": "周四",
+      "5": "周五",
+      "6": "周六"
+    }
+  },
   subscriptionsPage: {
     title: "订阅",
     description: "先解析 RSS，再从解析结果中选择订阅名称、字幕组、分辨率和字幕语言。"
@@ -287,6 +301,8 @@ const zhCN = {
     clearFilters: "清空筛选",
     autoDownload: "自动离线",
     create: "创建订阅",
+    exportJson: "导出备份",
+    importJson: "导入备份",
     tracking: "追更中",
     noTracking: "暂无追更中的订阅。",
     archived: "已归档",
@@ -439,6 +455,7 @@ const zhCN = {
     mediaServerNotConfigured: "请先选择媒体服务器并填写地址和 Token",
     notificationTestOk: "测试通知已发送：{channels}",
     notificationNotConfigured: "请先启用并填写至少一个通知通道",
+    importOk: "导入完成：新增 {imported} 个，跳过 {skipped} 个已存在订阅",
     actionFailed: "操作失败：{error}"
   }
 } as const;

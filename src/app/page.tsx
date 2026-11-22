@@ -4,6 +4,7 @@ import { DashboardMotion } from "@/components/dashboard-motion";
 import { OverviewPollForm } from "@/components/overview-poll-form";
 import { cn } from "@/lib/utils";
 import { EpisodeTable } from "@/components/episode-table";
+import { ScheduleStrip } from "@/components/schedule-strip";
 import { WorkerTaskTable } from "@/components/worker-task-table";
 import { getDashboardData } from "@/lib/db/repositories";
 import { formatDateTime } from "@/lib/utils";
@@ -115,6 +116,10 @@ export default async function HomePage({
           </div>
         </div>
         <WorkerHealthNotice health={data.workerHealth} t={t} />
+        <ScheduleStrip
+          entries={data.schedule}
+          todayWeekday={new Date(Date.now() + 8 * 60 * 60 * 1000).getUTCDay()}
+        />
         <EpisodeTable pageData={data.episodePage} />
         <WorkerTaskTable
           pageData={data.workerTaskPage}

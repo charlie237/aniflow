@@ -1,5 +1,5 @@
 import { count, eq, inArray } from "drizzle-orm";
-import { getDb } from "@/lib/db/client";
+import { getDb, getSqlite } from "@/lib/db/client";
 import { queryDashboardEpisodePage } from "@/lib/db/dashboard";
 import { downloadJobs } from "@/lib/db/schema";
 import type {
@@ -8,8 +8,10 @@ import type {
   EpisodeStatusFilter,
   Subscription,
   SubscriptionStateFilter,
+  WeeklyScheduleEntry,
   WorkerTaskCategory
 } from "@/lib/db/types";
+import { parseToUtcDate } from "@/lib/time";
 import {
   listRules,
   listSubscriptions
@@ -44,6 +46,7 @@ export function getDashboardData(input: DashboardQueryInput = {}): DashboardData
     workerTaskPage: getDashboardWorkerTaskPage(input),
     episodePage,
     workerHealth: getWorkerHealth(),
+    schedule: getWeeklySchedule(allSubscriptions),
     stats
   };
 }
@@ -144,4 +147,89 @@ function getDashboardStats(
     needsReview: Number(needsReviewJobs?.count ?? 0),
     completedJobs: Number(completedJobs?.count ?? 0)
   };
+}
+
+const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
+
+function getWeeklySchedule(
+  allSubscriptions: Subscription[]
+): WeeklyScheduleEntry[] {
+  const activeSubs = allSubscriptions.filter((sub) => sub.enabled);
+  if (activeSubs.length === 0) return [];
+
+  const subById = new Map(activeSubs.map((sub) => [sub.id, sub]));
+  const rows = getSqlite()
+    .prepare(
+      `SELECT
+         f.subscription_id,
+         COALESCE(NULLIF(f.published_at, ''), f.first_seen_at) AS release_at,
+         m.episode_number
+       FROM feed_items f
+       JOIN subscriptions s ON s.id = f.subscription_id
+       LEFT JOIN release_metadata m ON m.feed_item_id = f.id
+       WHERE s.enabled = 1
+       ORDER BY datetime(COALESCE(NULLIF(f.published_at, ''), f.first_seen_at)) DESC, f.id DESC`
+    )
+    .all() as Array<{
+    subscription_id: number;
+    release_at: string | null;
+    episode_number: number | null;
+  }>;
+
+  const grouped = new Map<
+    number,
+    Array<{ releaseAt: string; episodeNumber: number | null }>
+  >();
+  for (const row of rows) {
+    if (!row.release_at || !subById.has(row.subscription_id)) continue;
+    const list = grouped.get(row.subscription_id) ?? [];
+    if (list.length < 6) {
+      list.push({
+        releaseAt: row.release_at,
+        episodeNumber: row.episode_number
+      });
+      grouped.set(row.subscription_id, list);
+    }
+  }
+
+  const entries: WeeklyScheduleEntry[] = [];
+  for (const [subId, samples] of grouped) {
+    const sub = subById.get(subId);
+    if (!sub || samples.length === 0) continue;
+
+    const counts = new Map<number, number>();
+    let bestDay: number | null = null;
+    let bestCount = -1;
+    let latestEpisode: number | null = null;
+
+    for (const sample of samples) {
+      const date = parseToUtcDate(sample.releaseAt);
+      if (Number.isNaN(date.getTime())) continue;
+      const shanghaiDay = new Date(date.getTime() + SHANGHAI_OFFSET_MS).getUTCDay();
+      const nextCount = (counts.get(shanghaiDay) ?? 0) + 1;
+      counts.set(shanghaiDay, nextCount);
+      if (nextCount > bestCount) {
+        bestCount = nextCount;
+        bestDay = shanghaiDay;
+      }
+      if (sample.episodeNumber != null) {
+        const effective = Math.max(0, sample.episodeNumber + sub.episodeOffset);
+        if (latestEpisode == null || effective > latestEpisode) {
+          latestEpisode = effective;
+        }
+      }
+    }
+
+    if (bestDay == null) continue;
+    entries.push({
+      subscriptionId: sub.id,
+      name: sub.name,
+      seasonNumber: sub.seasonNumber,
+      weekday: bestDay,
+      latestEpisode,
+      lastPublishedAt: samples[0].releaseAt
+    });
+  }
+
+  return entries.sort((a, b) => a.name.localeCompare(b.name));
 }

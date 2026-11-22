@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/app-shell";
 import { RssPreviewPanel } from "@/components/rss-preview-panel";
+import { SubscriptionBackupBar } from "@/components/subscription-backup-bar";
 import { SubscriptionForm } from "@/components/subscription-form";
 import {
   listRules,
@@ -36,13 +37,16 @@ export default async function SubscriptionsPage({
   return (
     <AppShell>
       <div className="mx-auto grid w-full max-w-7xl gap-5 px-4 py-6 md:px-6">
-        <section>
-          <h1 className="text-3xl font-semibold tracking-tight">
-            {t("subscriptionsPage.title")}
-          </h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">
-            {t("subscriptionsPage.description")}
-          </p>
+        <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-semibold tracking-tight">
+              {t("subscriptionsPage.title")}
+            </h1>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">
+              {t("subscriptionsPage.description")}
+            </p>
+          </div>
+          <SubscriptionBackupBar />
         </section>
 
         <RssPreviewPanel preview={preview} error={error} initialUrl={rssUrl} />
