@@ -71,7 +71,7 @@ const zhCN = {
   },
   settingsPage: {
     title: "后台设置",
-    description: "配置 OpenList 115 离线、TMDB 展示令牌和 Worker 轮询间隔。"
+    description: "配置 OpenList 115 离线、代理、命名模板和 Worker 轮询间隔。"
   },
   status: {
     job: {
@@ -326,7 +326,7 @@ const zhCN = {
     variables: "可用变量",
     example: "示例：/115/Anime/Show/Season 01/Show - S01E01.mkv",
     miscTitle: "杂项",
-    miscDescription: "TMDB 只做展示增强；Worker 间隔与下载超时影响后台任务节奏。",
+    miscDescription: "Worker 间隔与下载超时影响后台任务调度节奏。",
     tmdbToken: "TMDB Bearer Token",
     workerInterval: "Worker 间隔秒数",
     workerIntervalHelp: "RSS 轮询与任务调度间隔，最短 30 秒。修改后下一轮生效。",

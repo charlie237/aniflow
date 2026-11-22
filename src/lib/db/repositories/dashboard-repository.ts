@@ -41,11 +41,7 @@ export function getDashboardData(input: DashboardQueryInput = {}): DashboardData
   return {
     subscriptions: allSubscriptions,
     rules: listRules(),
-    rssItems: [],
-    feedItems: [],
-    jobs: [],
     workerTaskPage: getDashboardWorkerTaskPage(input),
-    episodeFiles: [],
     episodePage,
     workerHealth: getWorkerHealth(),
     stats

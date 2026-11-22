@@ -49,15 +49,15 @@ AUTH_SECRET=
 
 - **Overview** — jobs, episodes, worker queue, and health
 - **Subscriptions** — parse RSS, create rules, archive or delete subscriptions
-- **Settings** — OpenList / 115 / proxy / naming / TMDB / worker interval, plus maintenance
+- **Settings** — OpenList / 115 / proxy / naming / worker interval, plus maintenance
 
 Theme preference (light, dark, or follow system) is stored in the browser; use the header icon to cycle modes.
 
 ## Required OpenList settings
 
-Open **Settings** in the app and configure OpenList API, 115 access method, proxy, naming templates, TMDB, and worker interval. Runtime integration settings are stored in SQLite, not in `.env`.
+Open **Settings** in the app and configure OpenList API, 115 access method, proxy, naming templates, and worker interval. Runtime integration settings are stored in SQLite, not in `.env`.
 
-The download directory is the **global incoming root**, for example `/115/Anime/_incoming`. New subscriptions default to a **per-subscription subdir** under that root (`/115/Anime/_incoming/{subscription name}`) so offline jobs from different shows do not share one folder. This is an OpenList remote path under a mounted 115 storage — not a local filesystem path and not WebDAV. The app submits RSS torrent or magnet URLs to `/api/fs/add_offline_download` with the subscription path, then uses OpenList fs APIs to scan, rename, create target directories, and move completed files.
+The download directory is the **global incoming root**, for example `/115/Anime/_incoming`. Every download job uses its own exclusive directory (`/115/Anime/_incoming/jobs/{jobId}`) so offline tasks never collide or require guessing ownership by filename. This is an OpenList remote path under a mounted 115 storage — not a local filesystem path and not WebDAV. The app submits RSS torrent or magnet URLs to `/api/fs/add_offline_download` with the job-owned path, then uses OpenList fs APIs to validate, rename, create target directories, and move completed files.
 
 `115 Cloud` and `115 Open` are different OpenList offline backends. Choose the one that matches the driver mounted at `/115`. The 115 check button syncs the download directory to OpenList's matching backend configuration before reading the ready tool list.
 
@@ -69,9 +69,9 @@ RSS fetching uses the proxy configured in **Settings** only when the proxy switc
 
 ## Subscription flow
 
-Use the **Subscriptions** page to parse an HTTPS `mikanani.me/RSS/` URL first. Other RSS providers and torrent download hosts are rejected by the server. After parsing, create a subscription by selecting the detected title, subtitle group, resolution, and subtitle language from dropdowns. Selected group / resolution / language values are saved as allow rules for that subscription.
+Use the **Subscriptions** page to parse an HTTPS `mikanani.me/RSS/` or `mikanime.tv/RSS/` URL first (extra HTTPS mirrors can be allowlisted via `MIKAN_ALLOWED_HOSTS`). Other RSS providers and torrent download hosts are rejected by the server. After parsing, create a subscription by selecting the detected title, subtitle group, resolution, and subtitle language from dropdowns. Selected group / resolution / language values are saved as allow rules for that subscription.
 
-Active subscriptions can be **archived** (stop tracking) or restored later. Deleting a subscription opens a confirm dialog; optionally enable **cleanup download residuals** to remove clearly matched files under that subscription’s incoming path (library media is never deleted).
+Active subscriptions can be **archived** (stop tracking) or restored later. Deleting a subscription is blocked while downloads are in flight and never removes remote OpenList tasks or files automatically — clean up remote files manually in OpenList if needed.
 
 ## Docker
 
@@ -112,6 +112,6 @@ Available variables: `{title}`, `{season}`, `{season_pad}`, `{episode}`, `{episo
 
 ## Notes
 
-- TMDB is optional and only used for display enrichment.
+- Health check endpoint: `GET /api/health` (returns database and worker heartbeat status).
 - Items without a parsed episode number are held for manual handling.
 - Rules can allow/block subtitle groups, resolutions, subtitle languages, and include/exclude keywords.

@@ -254,31 +254,7 @@ export type PublicSystemSettings = Omit<
 export interface DashboardData {
   subscriptions: Subscription[];
   rules: FilterRule[];
-  rssItems: Array<
-    FeedItem & {
-      subscriptionName: string;
-      metadata: ReleaseMetadata | null;
-      job: DownloadJob | null;
-      ruleAllowed: boolean;
-      ruleReasons: string[];
-    }
-  >;
-  feedItems: Array<
-    FeedItem & {
-      subscriptionName: string;
-      metadata: ReleaseMetadata | null;
-      job: DownloadJob | null;
-    }
-  >;
-  jobs: Array<
-    DownloadJob & {
-      subscriptionName: string;
-      feedTitle: string;
-      metadata: ReleaseMetadata | null;
-    }
-  >;
   workerTaskPage: DashboardWorkerTaskPage;
-  episodeFiles: EpisodeFile[];
   episodePage: DashboardEpisodePage;
   workerHealth: WorkerHealth;
   stats: {

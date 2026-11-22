@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { torrentBufferToMagnet } from "@/lib/torrent/magnet";
+import {
+  extractBtih,
+  extractMagnetDisplayName,
+  torrentBufferToMagnet
+} from "@/lib/torrent/magnet";
 
 describe("torrentBufferToMagnet", () => {
   it("builds a magnet URI from torrent metadata", () => {
@@ -18,5 +22,13 @@ describe("torrentBufferToMagnet", () => {
     expect(magnet).toContain(
       `tr=${encodeURIComponent("udp://tracker.example:80")}`
     );
+  });
+
+  it("extracts btih and display name from magnet URIs", () => {
+    const hash = "a".repeat(40);
+    expect(extractBtih(`magnet:?xt=urn:btih:${hash}&dn=show`)).toBe(hash);
+    expect(
+      extractMagnetDisplayName(`magnet:?xt=urn:btih:${hash}&dn=My%20Show`)
+    ).toBe("My Show");
   });
 });

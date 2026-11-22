@@ -232,26 +232,6 @@ export function SettingsForm({
             <CardDescription>{t("settings.miscDescription")}</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-2">
-            <div className="grid gap-1.5">
-              <Field
-                label={t("settings.tmdbToken")}
-                name="tmdbBearerToken"
-                defaultValue=""
-                placeholder={
-                  settings.hasTmdbBearerToken
-                    ? t("settings.tokenConfiguredPlaceholder")
-                    : ""
-                }
-                type="password"
-                autoComplete="new-password"
-              />
-              {settings.hasTmdbBearerToken ? (
-                <label className="flex items-center gap-1.5 text-xs text-[var(--muted)]">
-                  <input type="checkbox" name="clearTmdbBearerToken" value="1" />
-                  {t("settings.clearToken")}
-                </label>
-              ) : null}
-            </div>
             <Field
               label={t("settings.workerInterval")}
               name="workerIntervalSeconds"

@@ -75,7 +75,7 @@ const en = {
   settingsPage: {
     title: "Settings",
     description:
-      "Configure OpenList 115 offline download, TMDB display token, and worker poll interval."
+      "Configure OpenList 115 offline download, proxy, naming templates, and worker poll interval."
   },
   status: {
     job: {
@@ -340,7 +340,7 @@ const en = {
     example: "Example: /115/Anime/Show/Season 01/Show - S01E01.mkv",
     miscTitle: "Misc",
     miscDescription:
-      "TMDB is display-only; worker interval and download timeout control background cadence.",
+      "Worker interval and download timeout control background task cadence.",
     tmdbToken: "TMDB Bearer Token",
     workerInterval: "Worker interval (seconds)",
     workerIntervalHelp:
