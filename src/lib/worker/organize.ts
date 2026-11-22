@@ -44,7 +44,8 @@ import {
   errorMessage,
   incomingPathForJob,
   libraryRootForSubscription,
-  listOpenListMediaFiles
+  listOpenListMediaFiles,
+  resolveEffectiveEpisodeNumber
 } from "@/lib/worker/pipeline-shared";
 
 const INCOMING_MUTATION_LEASE = "incoming-mutation";
@@ -167,6 +168,21 @@ async function scanJobTarget(job: DownloadJob) {
     });
     return;
   }
+  const effectiveEpisode = resolveEffectiveEpisodeNumber(
+    metadata.episodeNumber,
+    subscription.episodeOffset
+  );
+  if (effectiveEpisode == null) {
+    updateJobStatus(job.id, "failed", {
+      errorMessage: contextualError(
+        "Downloaded file validation failed",
+        `Episode ${metadata.episodeNumber} with offset ${subscription.episodeOffset} produces an invalid episode number`,
+        { targetPath, file: file.name }
+      )
+    });
+    return;
+  }
+
   const parsed = parseReleaseTitle(file.name);
   const episode =
     parsed.episodeNumber ??
@@ -175,7 +191,9 @@ async function scanJobTarget(job: DownloadJob) {
       seasonNumber: subscription.seasonNumber,
       episodeFileTemplate: getSystemSettings().episodeFileTemplate
     });
-  if (episode !== metadata.episodeNumber) {
+  // Accept either the raw RSS episode number (e.g. ep 25 before offset -24) or
+  // the already season-adjusted episode number (e.g. S02E01).
+  if (episode !== metadata.episodeNumber && episode !== effectiveEpisode) {
     updateJobStatus(job.id, "failed", {
       errorMessage: contextualError(
         "Downloaded file validation failed",
@@ -186,7 +204,7 @@ async function scanJobTarget(job: DownloadJob) {
     return;
   }
 
-  await organizeJobFile(file, subscription, job, metadata.episodeNumber);
+  await organizeJobFile(file, subscription, job, effectiveEpisode);
 }
 
 async function organizeJobFile(

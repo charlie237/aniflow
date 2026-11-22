@@ -24,6 +24,8 @@ export const subscriptions = sqliteTable(
     enabled: integer("enabled").notNull().default(1),
     autoDownload: integer("auto_download").notNull().default(1),
     seasonNumber: integer("season_number").notNull().default(1),
+    episodeOffset: integer("episode_offset").notNull().default(0),
+    startEpisode: integer("start_episode"),
     destinationRoot: text("destination_root").notNull().default("/115/Anime"),
     incomingPath: text("incoming_path"),
     tmdbSeriesId: integer("tmdb_series_id"),

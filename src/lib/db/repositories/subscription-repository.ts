@@ -19,6 +19,8 @@ export interface SubscriptionInput {
   enabled?: boolean;
   autoDownload?: boolean;
   seasonNumber?: number;
+  episodeOffset?: number;
+  startEpisode?: number | null;
   destinationRoot?: string;
   incomingPath?: string | null;
   tmdbSeriesId?: number | null;
@@ -233,12 +235,22 @@ export function deleteRule(id: number) {
 }
 
 function normalizeSubscriptionInput(input: SubscriptionInput) {
+  const rawOffset = Number(input.episodeOffset ?? 0);
+  const episodeOffset = Number.isInteger(rawOffset) ? rawOffset : 0;
+  const rawStart = input.startEpisode;
+  const startEpisode =
+    rawStart != null && Number.isInteger(Number(rawStart)) && Number(rawStart) >= 0
+      ? Number(rawStart)
+      : null;
+
   return {
     name: input.name.trim(),
     rssUrl: input.rssUrl.trim(),
     enabled: input.enabled === false ? 0 : 1,
     autoDownload: input.autoDownload === false ? 0 : 1,
     seasonNumber: input.seasonNumber ?? 1,
+    episodeOffset,
+    startEpisode,
     destinationRoot:
       input.destinationRoot?.trim() || DEFAULT_SYSTEM_SETTINGS.mediaLibraryRoot,
     incomingPath: input.incomingPath?.trim() || null,

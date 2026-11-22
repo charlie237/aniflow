@@ -16,6 +16,8 @@ const createSubscriptionSchema = z
       message: "Only mikanani.me/RSS/ URLs are supported"
     }),
     seasonNumber: z.coerce.number().int().min(0).max(99).optional(),
+    episodeOffset: z.coerce.number().int().min(-999).max(999).optional(),
+    startEpisode: z.coerce.number().int().min(0).max(999).nullable().optional(),
     destinationRoot: z.string().trim().min(1).optional(),
     tmdbSeriesId: z.coerce.number().int().positive().nullable().optional()
   })
@@ -42,6 +44,8 @@ export async function POST(request: Request) {
       name: body.name,
       rssUrl: body.rssUrl,
       seasonNumber: body.seasonNumber ?? 1,
+      episodeOffset: body.episodeOffset ?? 0,
+      startEpisode: body.startEpisode ?? null,
       destinationRoot: body.destinationRoot ?? settings.mediaLibraryRoot,
       incomingPath: null,
       tmdbSeriesId: body.tmdbSeriesId ?? null

@@ -59,6 +59,8 @@ export interface Subscription {
   enabled: boolean;
   autoDownload: boolean;
   seasonNumber: number;
+  episodeOffset: number;
+  startEpisode: number | null;
   destinationRoot: string;
   incomingPath: string | null;
   tmdbSeriesId: number | null;

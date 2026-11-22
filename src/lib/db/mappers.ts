@@ -18,6 +18,8 @@ export function mapSubscription(row: Record<string, unknown>): Subscription {
     enabled: Boolean(pick(row, "enabled")),
     autoDownload: Boolean(pick(row, "autoDownload", "auto_download")),
     seasonNumber: Number(pick(row, "seasonNumber", "season_number")),
+    episodeOffset: Number(pick(row, "episodeOffset", "episode_offset") ?? 0),
+    startEpisode: nullableNumber(pick(row, "startEpisode", "start_episode")),
     destinationRoot: String(pick(row, "destinationRoot", "destination_root")),
     incomingPath: nullableString(pick(row, "incomingPath", "incoming_path")),
     tmdbSeriesId: nullableNumber(pick(row, "tmdbSeriesId", "tmdb_series_id")),

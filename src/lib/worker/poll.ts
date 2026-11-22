@@ -21,6 +21,7 @@ import { syncSubscriptionLibrary } from "@/lib/worker/library-sync";
 import {
   contextualError,
   markSupersededJob,
+  resolveEffectiveEpisodeNumber,
   supersedeSiblingRevisionJobs,
   type PipelineResult,
   type WorkerTaskProgress,
@@ -248,10 +249,31 @@ async function pollSubscriptionFeed(
     }
 
     const existingJob = getJobForFeedItem(feedItem.id);
+    const effectiveEpisode = resolveEffectiveEpisodeNumber(
+      metadata.episodeNumber,
+      subscription.episodeOffset
+    );
+    if (
+      subscription.startEpisode != null &&
+      effectiveEpisode != null &&
+      effectiveEpisode < subscription.startEpisode
+    ) {
+      if (
+        existingJob &&
+        ["discovered", "queued", "needs_review"].includes(existingJob.status)
+      ) {
+        updateJobStatus(existingJob.id, "skipped", {
+          errorMessage: `Episode ${effectiveEpisode} is before start episode ${subscription.startEpisode}`
+        });
+      }
+      result.skipped += 1;
+      continue;
+    }
+
     const libraryEpisode =
-      metadata.episodeNumber == null
+      effectiveEpisode == null
         ? null
-        : getLibraryEpisodeState(subscription.id, metadata.episodeNumber);
+        : getLibraryEpisodeState(subscription.id, effectiveEpisode);
     if (libraryEpisode) {
       const knownRevision = libraryEpisode.knownRevision;
       const isKnownUpgrade =
@@ -327,13 +349,16 @@ async function pollSubscriptionFeed(
       continue;
     }
 
-    if (metadata.needsReview || metadata.episodeNumber == null) {
+    if (metadata.needsReview || metadata.episodeNumber == null || effectiveEpisode == null) {
       createOrUpdateJob({
         subscriptionId: subscription.id,
         feedItemId: feedItem.id,
         status: "needs_review",
         sourceUrl: candidate.downloadUrl,
-        errorMessage: "Episode number could not be parsed"
+        errorMessage:
+          metadata.episodeNumber != null && effectiveEpisode == null
+            ? `Episode ${metadata.episodeNumber} with offset ${subscription.episodeOffset} produces an invalid episode number`
+            : "Episode number could not be parsed"
       });
       result.skipped += 1;
       continue;

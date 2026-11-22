@@ -129,3 +129,16 @@ export function libraryRootForSubscription(subscription: Subscription) {
   const root = subscription.destinationRoot?.trim() || settings.mediaLibraryRoot;
   return joinRemotePath(root);
 }
+
+/**
+ * Apply a subscription's episodeOffset to a parsed feed episode number.
+ * Returns null if the raw episode is null or the shifted episode would be negative.
+ */
+export function resolveEffectiveEpisodeNumber(
+  rawEpisode: number | null | undefined,
+  episodeOffset = 0
+): number | null {
+  if (rawEpisode == null || !Number.isInteger(rawEpisode)) return null;
+  const shifted = rawEpisode + (Number.isInteger(episodeOffset) ? episodeOffset : 0);
+  return shifted >= 0 ? shifted : null;
+}

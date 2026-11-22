@@ -15,8 +15,10 @@ import type { ChangeEvent, InputHTMLAttributes } from "react";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 import {
+  addRuleAction,
   archiveSubscriptionAction,
   createParsedSubscriptionAction,
+  deleteRuleAction,
   deleteSubscriptionAction,
   restoreSubscriptionAction,
   updateParsedSubscriptionAction
@@ -209,7 +211,7 @@ function CreateFromPreview({ preview }: { preview: RssPreview }) {
       className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] p-3"
     >
       <input type="hidden" name="rssUrl" value={preview.url} />
-      <div className="grid gap-2 md:grid-cols-2">
+      <div className="grid gap-2 md:grid-cols-4">
         <EditableField
           label={t("subscription.name")}
           name="name"
@@ -226,6 +228,23 @@ function CreateFromPreview({ preview }: { preview: RssPreview }) {
           min={0}
           max={99}
           required
+        />
+        <FormField
+          label={t("subscription.episodeOffset")}
+          name="episodeOffset"
+          type="number"
+          min={-999}
+          max={999}
+          defaultValue="0"
+          placeholder="0"
+        />
+        <FormField
+          label={t("subscription.startEpisode")}
+          name="startEpisode"
+          type="number"
+          min={0}
+          max={999}
+          placeholder={t("subscription.optionalPlaceholder")}
         />
       </div>
       <div className="grid gap-2 lg:grid-cols-[1fr_auto] lg:items-end">
@@ -553,6 +572,9 @@ function SubscriptionSummary({
   rules: FilterRule[];
 }) {
   const { t } = useI18n();
+  const extraRules = rules.filter((rule) =>
+    ["keyword_include", "keyword_exclude", "group_block"].includes(rule.type)
+  );
   return (
     <div className="flex flex-wrap gap-2 text-xs text-[var(--muted)]">
       <span>{subscription.enabled ? t("subscription.tracking") : t("subscription.archived")}</span>
@@ -560,6 +582,24 @@ function SubscriptionSummary({
       <RuleBadge label={t("subscription.group")} value={coreRuleValue(rules, "group_allow")} />
       <RuleBadge label={t("subscription.resolution")} value={coreRuleValue(rules, "resolution_allow")} />
       <RuleBadge label={t("subscription.language")} value={coreRuleValue(rules, "language_allow")} />
+      {subscription.episodeOffset !== 0 ? (
+        <Badge variant="amber">
+          {t("subscription.episodeOffset")}:{" "}
+          {subscription.episodeOffset > 0
+            ? `+${subscription.episodeOffset}`
+            : subscription.episodeOffset}
+        </Badge>
+      ) : null}
+      {subscription.startEpisode != null ? (
+        <Badge variant="muted">
+          {t("subscription.startEpisode")}: EP{String(subscription.startEpisode).padStart(2, "0")}
+        </Badge>
+      ) : null}
+      {extraRules.map((rule) => (
+        <Badge key={rule.id} variant="muted">
+          {t(`subscription.ruleTypes.${rule.type}`)}: {rule.value}
+        </Badge>
+      ))}
     </div>
   );
 }
@@ -600,74 +640,210 @@ function EditSubscriptionForm({
   }
 
   return (
-    <form
-      action={handleSave}
-      className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] p-3"
-    >
-      <input type="hidden" name="id" value={subscription.id} />
-      <div className="grid gap-2 md:grid-cols-2">
-        <FormField
-          label={t("subscription.name")}
-          name="name"
-          defaultValue={subscription.name}
-          required
-        />
-        <FormField
-          label="RSS URL"
-          name="rssUrl"
-          defaultValue={subscription.rssUrl}
-          required
-        />
-        <FormField
-          label={t("subscription.season")}
-          name="seasonNumber"
-          type="number"
-          min={0}
-          max={99}
-          defaultValue={String(subscription.seasonNumber)}
-          required
-        />
-      </div>
-      <div className="grid gap-2 md:grid-cols-3">
-        <FormField
-          label={t("subscription.group")}
-          name="releaseGroup"
-          defaultValue={coreRuleValue(rules, "group_allow")}
-          required
-        />
-        <FormField
-          label={t("subscription.resolution")}
-          name="resolution"
-          defaultValue={coreRuleValue(rules, "resolution_allow")}
-          required
-        />
-        <FormField
-          label={t("subscription.language")}
-          name="subtitleLanguage"
-          defaultValue={coreRuleValue(rules, "language_allow")}
-          required
-        />
-      </div>
-      <div className="flex flex-wrap items-center gap-4 text-sm">
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            name="autoDownload"
-            value="1"
-            defaultChecked={subscription.autoDownload}
+    <div className="grid gap-3 rounded-[var(--radius)] border border-[var(--line)] bg-[var(--panel-strong)] p-3">
+      <form action={handleSave} className="grid gap-3">
+        <input type="hidden" name="id" value={subscription.id} />
+        <div className="grid gap-2 md:grid-cols-2">
+          <FormField
+            label={t("subscription.name")}
+            name="name"
+            defaultValue={subscription.name}
+            required
           />
-          {t("subscription.autoDownload")}
-        </label>
-        <Button type="submit" variant="signal" disabled={saving}>
-          {saving ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Save className="size-4" />
-          )}
-          {t("subscription.save")}
-        </Button>
+          <FormField
+            label="RSS URL"
+            name="rssUrl"
+            defaultValue={subscription.rssUrl}
+            required
+          />
+          <FormField
+            label={t("subscription.destinationRoot")}
+            name="destinationRoot"
+            defaultValue={subscription.destinationRoot}
+            placeholder="/115/Anime"
+          />
+          <div className="grid grid-cols-3 gap-2">
+            <FormField
+              label={t("subscription.season")}
+              name="seasonNumber"
+              type="number"
+              min={0}
+              max={99}
+              defaultValue={String(subscription.seasonNumber)}
+              required
+            />
+            <FormField
+              label={t("subscription.episodeOffset")}
+              name="episodeOffset"
+              type="number"
+              min={-999}
+              max={999}
+              defaultValue={String(subscription.episodeOffset)}
+            />
+            <FormField
+              label={t("subscription.startEpisode")}
+              name="startEpisode"
+              type="number"
+              min={0}
+              max={999}
+              defaultValue={
+                subscription.startEpisode != null
+                  ? String(subscription.startEpisode)
+                  : ""
+              }
+              placeholder={t("subscription.optionalPlaceholder")}
+            />
+          </div>
+        </div>
+        <div className="grid gap-2 md:grid-cols-3">
+          <FormField
+            label={t("subscription.group")}
+            name="releaseGroup"
+            defaultValue={coreRuleValue(rules, "group_allow")}
+            required
+          />
+          <FormField
+            label={t("subscription.resolution")}
+            name="resolution"
+            defaultValue={coreRuleValue(rules, "resolution_allow")}
+            required
+          />
+          <FormField
+            label={t("subscription.language")}
+            name="subtitleLanguage"
+            defaultValue={coreRuleValue(rules, "language_allow")}
+            required
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-4 text-sm">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              name="autoDownload"
+              value="1"
+              defaultChecked={subscription.autoDownload}
+            />
+            {t("subscription.autoDownload")}
+          </label>
+          <Button type="submit" variant="signal" disabled={saving}>
+            {saving ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Save className="size-4" />
+            )}
+            {t("subscription.save")}
+          </Button>
+        </div>
+      </form>
+      <AdvancedRulesManager subscriptionId={subscription.id} rules={rules} />
+    </div>
+  );
+}
+
+function AdvancedRulesManager({
+  subscriptionId,
+  rules
+}: {
+  subscriptionId: number;
+  rules: FilterRule[];
+}) {
+  const { t } = useI18n();
+  const [pending, startTransition] = useTransition();
+  const [ruleValue, setRuleValue] = useState("");
+  const extraRules = rules.filter((rule) =>
+    ["keyword_include", "keyword_exclude", "group_block"].includes(rule.type)
+  );
+
+  function handleAdd(formData: FormData) {
+    startTransition(async () => {
+      const result = await addRuleAction(formData);
+      if (result.ok) {
+        setRuleValue("");
+        toast.success(result.message ?? t("toast.ruleAdded"));
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
+
+  function handleDelete(formData: FormData) {
+    startTransition(async () => {
+      const result = await deleteRuleAction(formData);
+      if (result.ok) {
+        toast.success(result.message ?? t("toast.ruleDeleted"));
+      } else {
+        toast.error(
+          t("toast.actionFailed", { error: result.error ?? t("common.unknown") })
+        );
+      }
+    });
+  }
+
+  return (
+    <div className="grid gap-2 border-t border-[var(--line)] pt-3">
+      <div className="text-xs font-medium text-[var(--muted)]">
+        {t("subscription.advancedRulesTitle")}
       </div>
-    </form>
+      {extraRules.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {extraRules.map((rule) => (
+            <form key={rule.id} action={handleDelete} className="inline-flex">
+              <input type="hidden" name="id" value={rule.id} />
+              <Badge variant="default" className="gap-1.5 pr-1">
+                <span>
+                  {t(`subscription.ruleTypes.${rule.type}`)}: {rule.value}
+                </span>
+                <button
+                  type="submit"
+                  disabled={pending}
+                  aria-label={t("common.delete")}
+                  className="rounded p-0.5 hover:bg-[var(--panel-strong)]"
+                >
+                  <X className="size-3" />
+                </button>
+              </Badge>
+            </form>
+          ))}
+        </div>
+      ) : null}
+      <form
+        action={handleAdd}
+        className="flex flex-wrap items-center gap-2"
+      >
+        <input type="hidden" name="subscriptionId" value={subscriptionId} />
+        <select
+          name="type"
+          defaultValue="keyword_exclude"
+          disabled={pending}
+          className="h-8 rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--input)] px-2 text-xs focus:outline-none focus:ring-2 focus:ring-[var(--signal)]"
+        >
+          <option value="keyword_exclude">
+            {t("subscription.ruleTypes.keyword_exclude")}
+          </option>
+          <option value="keyword_include">
+            {t("subscription.ruleTypes.keyword_include")}
+          </option>
+          <option value="group_block">
+            {t("subscription.ruleTypes.group_block")}
+          </option>
+        </select>
+        <Input
+          name="value"
+          value={ruleValue}
+          onChange={(event) => setRuleValue(event.target.value)}
+          placeholder={t("subscription.ruleValuePlaceholder")}
+          required
+          disabled={pending}
+          className="h-8 min-w-[160px] flex-1 text-xs"
+        />
+        <Button type="submit" size="sm" variant="outline" disabled={pending}>
+          {pending ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+          {t("subscription.addRule")}
+        </Button>
+      </form>
+    </div>
   );
 }
 

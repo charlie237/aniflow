@@ -54,6 +54,12 @@ const parsedSubscriptionSchema = z.object({
   resolution: z.string().min(1),
   subtitleLanguage: z.string().min(1),
   seasonNumber: z.coerce.number().int().min(0).max(99),
+  episodeOffset: z.coerce.number().int().min(-999).max(999).default(0),
+  startEpisode: z.preprocess(
+    (value) => (value === "" || value == null ? null : value),
+    z.coerce.number().int().min(0).max(999).nullable()
+  ),
+  destinationRoot: z.string().trim().optional().default(""),
   autoDownload: z.boolean()
 });
 
@@ -134,6 +140,9 @@ export async function createParsedSubscriptionAction(
       resolution: optionalFormString(formData.get("resolution")),
       subtitleLanguage: optionalFormString(formData.get("subtitleLanguage")),
       seasonNumber: formData.get("seasonNumber") ?? 1,
+      episodeOffset: formData.get("episodeOffset") || 0,
+      startEpisode: formData.get("startEpisode"),
+      destinationRoot: formData.get("destinationRoot")?.toString() ?? "",
       autoDownload: toBool(formData.get("autoDownload"))
     });
 
@@ -143,7 +152,9 @@ export async function createParsedSubscriptionAction(
       enabled: true,
       autoDownload: parsed.autoDownload,
       seasonNumber: parsed.seasonNumber,
-      destinationRoot: settings.mediaLibraryRoot,
+      episodeOffset: parsed.episodeOffset,
+      startEpisode: parsed.startEpisode,
+      destinationRoot: parsed.destinationRoot || settings.mediaLibraryRoot,
       incomingPath: null
     });
 
@@ -186,6 +197,9 @@ export async function updateParsedSubscriptionAction(
       resolution: optionalFormString(formData.get("resolution")),
       subtitleLanguage: optionalFormString(formData.get("subtitleLanguage")),
       seasonNumber: formData.get("seasonNumber") ?? 1,
+      episodeOffset: formData.get("episodeOffset") || 0,
+      startEpisode: formData.get("startEpisode"),
+      destinationRoot: formData.get("destinationRoot")?.toString() ?? "",
       autoDownload: toBool(formData.get("autoDownload"))
     });
 
@@ -195,7 +209,10 @@ export async function updateParsedSubscriptionAction(
       enabled: existing.enabled,
       autoDownload: parsed.autoDownload,
       seasonNumber: parsed.seasonNumber,
-      destinationRoot: existing.destinationRoot || settings.mediaLibraryRoot,
+      episodeOffset: parsed.episodeOffset,
+      startEpisode: parsed.startEpisode,
+      destinationRoot:
+        parsed.destinationRoot || existing.destinationRoot || settings.mediaLibraryRoot,
       // Legacy value is retained for database compatibility but no longer used.
       incomingPath: existing.incomingPath,
       tmdbSeriesId: existing.tmdbSeriesId
@@ -265,7 +282,7 @@ export async function addRuleAction(formData: FormData): Promise<ActionResult> {
     addRule(parsed.subscriptionId, parsed.type as RuleType, parsed.value);
     revalidatePath("/");
     revalidatePath("/subscriptions");
-    return { ok: true };
+    return { ok: true, message: t("toast.ruleAdded") };
   } catch (error) {
     return { ok: false, error: formatActionError(error, t) };
   }
@@ -278,7 +295,7 @@ export async function deleteRuleAction(formData: FormData): Promise<ActionResult
     if (Number.isFinite(id)) deleteRule(id);
     revalidatePath("/");
     revalidatePath("/subscriptions");
-    return { ok: true };
+    return { ok: true, message: t("toast.ruleDeleted") };
   } catch (error) {
     return { ok: false, error: formatActionError(error, t) };
   }

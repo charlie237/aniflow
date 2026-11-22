@@ -35,6 +35,7 @@ import { scanAndRenameIncoming } from "@/lib/worker/organize";
 import {
   contextualError,
   incomingPathForJob,
+  resolveEffectiveEpisodeNumber,
   supersedeSiblingRevisionJobs,
   type WorkerTaskProgressReporter
 } from "@/lib/worker/pipeline-shared";
@@ -267,14 +268,18 @@ async function submitJobOnce(job: DownloadJob) {
   // Pre-flight library check: retry must not re-download an episode that is
   // already in the library unless the revision policy would replace it.
   const settings = getSystemSettings();
-  if (metadata?.episodeNumber != null) {
+  const effectiveEpisode = resolveEffectiveEpisodeNumber(
+    metadata?.episodeNumber,
+    subscription.episodeOffset
+  );
+  if (effectiveEpisode != null) {
     const libraryEpisode = getLibraryEpisodeState(
       subscription.id,
-      metadata.episodeNumber
+      effectiveEpisode
     );
     if (libraryEpisode) {
       const claimedRevision = resolveClaimedRevision({
-        jobMetadataRevision: metadata.releaseRevision
+        jobMetadataRevision: metadata?.releaseRevision
       });
       const overwriteDecision = canOverwriteLibraryFile({
         claimedRevision,
@@ -287,7 +292,7 @@ async function submitJobOnce(job: DownloadJob) {
           errorMessage: contextualError(
             "Library episode already exists",
             overwriteDecision.reason,
-            { episodeNumber: metadata.episodeNumber, path: libraryEpisode.path }
+            { episodeNumber: effectiveEpisode, path: libraryEpisode.path }
           )
         });
         console.log(

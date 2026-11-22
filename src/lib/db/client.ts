@@ -66,6 +66,8 @@ function bootstrapSchema(database: Database.Database) {
       enabled INTEGER NOT NULL DEFAULT 1,
       auto_download INTEGER NOT NULL DEFAULT 1,
       season_number INTEGER NOT NULL DEFAULT 1,
+      episode_offset INTEGER NOT NULL DEFAULT 0,
+      start_episode INTEGER,
       destination_root TEXT NOT NULL DEFAULT '/115/Anime',
       incoming_path TEXT,
       tmdb_series_id INTEGER,
@@ -175,6 +177,8 @@ function bootstrapSchema(database: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_worker_tasks_target
       ON worker_tasks(type, subscription_id, status);
   `);
+  ensureColumn(database, "subscriptions", "episode_offset", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(database, "subscriptions", "start_episode", "INTEGER");
   ensureColumn(database, "feed_items", "rss_guid", "TEXT");
   normalizeReleaseMetadataSchema(database);
   ensureColumn(database, "release_metadata", "release_revision", "INTEGER NOT NULL DEFAULT 1");

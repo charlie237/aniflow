@@ -1477,4 +1477,91 @@ describe("download fail-stop lifecycle", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("applies episodeOffset during organize and respects startEpisode during poll", async () => {
+    const sub = createSubscription({
+      name: "Offset Show",
+      rssUrl: "https://mikanani.me/RSS/Bangumi?bangumiId=9401",
+      seasonNumber: 2,
+      episodeOffset: -24,
+      startEpisode: 2,
+      destinationRoot: "/115/Anime"
+    });
+    if (!sub) return;
+
+    const xml = `<rss version="2.0"><channel>
+      <item>
+        <guid>offset-25</guid>
+        <title>[G] Offset Show - 25 [1080p][CHS].mkv</title>
+        <enclosure url="https://mikanani.me/Download/offset-25.torrent" type="application/x-bittorrent" />
+      </item>
+      <item>
+        <guid>offset-26</guid>
+        <title>[G] Offset Show - 26 [1080p][CHS].mkv</title>
+        <enclosure url="https://mikanani.me/Download/offset-26.torrent" type="application/x-bittorrent" />
+      </item>
+    </channel></rss>`;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(xml, { status: 200 })));
+    let ep26JobId: number | null = null;
+    try {
+      const poll = await pollSubscription(sub.id);
+      // ep 25 -> effective ep 1 (< startEpisode 2) => skipped; ep 26 -> effective ep 2 => queued
+      expect(poll.queued).toBe(1);
+      expect(poll.skipped).toBe(1);
+
+      const ep26Feed = getSqlite()
+        .prepare("SELECT id FROM feed_items WHERE guid = ?")
+        .get("offset-26") as { id: number };
+      const job26 = getJobForFeedItem(ep26Feed.id);
+      expect(job26).toBeTruthy();
+      ep26JobId = job26!.id;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    // Now simulate file landing with raw ep 26 filename -> should organize as S02E02
+    const targetPath = incomingPathForJob(ep26JobId!);
+    getSqlite()
+      .prepare("UPDATE download_jobs SET status = 'downloading', target_path = ? WHERE id = ?")
+      .run(targetPath, ep26JobId);
+    saveSystemSettings({
+      ...getSystemSettings(),
+      openlistBaseUrl: "http://openlist.local",
+      openlistToken: "token",
+      openlistIncomingPath: "/115/Anime/_incoming",
+      mediaLibraryRoot: "/115/Anime"
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const endpoint = String(input);
+        const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+        const isJobList =
+          endpoint.endsWith("/api/fs/list") && body.path === targetPath;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            code: 200,
+            data: isJobList
+              ? {
+                  content: [
+                    { name: "[G] Offset Show - 26 [1080p][CHS].mkv", size: 123, is_dir: false }
+                  ]
+                }
+              : { content: [] }
+          })
+        };
+      })
+    );
+    try {
+      await scanAndRenameIncoming();
+      expect(getJob(ep26JobId!)).toMatchObject({
+        status: "completed",
+        targetPath: "/115/Anime/Offset Show/Season 02/Offset Show - S02E02.mkv"
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
